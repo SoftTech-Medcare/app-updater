@@ -1,9 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using Updater.Properties;
 
 namespace Updater.Services
@@ -52,18 +48,32 @@ namespace Updater.Services
 
         public void Set(string key, string value)
         {
-            object converted = value;
-            if (key == nameof(Settings.Default.UpdateServer))
+            switch (key)
             {
-                converted = string.IsNullOrWhiteSpace(value) ? "" : (Regex.IsMatch(value, @"^https?://") ? value : "http://" + value);
+                case nameof(Settings.Default.UpdateServer):
+                    Settings.Default.UpdateServer = string.IsNullOrWhiteSpace(value)
+                        ? ""
+                        : (Regex.IsMatch(value, @"^https?://") ? value : "http://" + value);
+                    break;
+                case nameof(Settings.Default.AppName):
+                    Settings.Default.AppName = value;
+                    break;
+                case nameof(Settings.Default.ClientAppPath):
+                    Settings.Default.ClientAppPath = value;
+                    break;
+                case nameof(Settings.Default.AutoReboot):
+                    Settings.Default.AutoReboot = Convert.ToBoolean(value);
+                    break;
+                case nameof(Settings.Default.ProgressFullscreen):
+                    Settings.Default.ProgressFullscreen = Convert.ToBoolean(value);
+                    break;
+                case nameof(Settings.Default.EnablePreReleaseVersions):
+                    Settings.Default.EnablePreReleaseVersions = Convert.ToBoolean(value);
+                    break;
+                default:
+                    throw new Exception($"Unknown setting: {key}");
             }
-            else if (key == nameof(Settings.Default.AutoReboot) || 
-                     key == nameof(Settings.Default.ProgressFullscreen) ||
-                     key == nameof(Settings.Default.EnablePreReleaseVersions))
-            {
-                converted = Convert.ToBoolean(value);
-            }
-            Settings.Default[key] = converted;
+
             Settings.Default.Save();
         }
 
