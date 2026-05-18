@@ -1,5 +1,6 @@
 using Avalonia;
 using System;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -353,6 +354,18 @@ namespace Updater.Services
         }
 
         /// <summary>One-line summary for the update-available dialog.</summary>
+        /// <summary>Staging folder for a pending updater self-update (under the running updater install root).</summary>
+        public static string GetSelfUpdatePendingDirectory(string? version = null)
+        {
+            var resolved = version
+                ?? SelfUpdateTargetVersion
+                ?? GetUpdaterVersion();
+            return Path.Combine(
+                GetUpdaterInstallDirectory(),
+                "pending-update",
+                $"updater-{resolved}");
+        }
+
         public static string GetSelfUpdateSummaryLine()
         {
             if (!SelfUpdateAdvertised)
