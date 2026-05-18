@@ -110,22 +110,17 @@ namespace Updater.Services
             return client;
         }
 
-        public static string GetUpdaterPackageAppName()
-        {
-            var name = Settings.Default.UpdaterPackageAppName?.Trim();
-            return string.IsNullOrWhiteSpace(name) ? "Updater" : name;
-        }
-
         private static string BuildDownloadUrl(string server, string appName, bool includePreRelease)
         {
             var baseUrl = server.TrimEnd('/');
             if (UseManifestSystem && CurrentUpgradeInfo != null)
             {
                 var fromVersion = Uri.EscapeDataString(CurrentUpgradeInfo.CurrentVersion ?? "");
-                return $"{baseUrl}/update/{Uri.EscapeDataString(appName)}/download-upgrade?fromVersion={fromVersion}&includePrerelease={includePreRelease}&includeSelfUpdate={Settings.Default.IncludeSelfUpdateInCheck}";
+                return $"{baseUrl}/update/{Uri.EscapeDataString(appName)}/download-upgrade?fromVersion={fromVersion}&includePrerelease={includePreRelease}";
             }
 
-            var targetApp = SelfUpdateOnlyMode ? GetUpdaterPackageAppName() : appName;
+            const string updaterApp = "Updater";
+            var targetApp = SelfUpdateOnlyMode ? updaterApp : appName;
             return $"{baseUrl}/update/{Uri.EscapeDataString(targetApp)}/download?includePreRelease={includePreRelease}";
         }
 

@@ -30,14 +30,9 @@ namespace Updater.Properties
         public string UpdateServer { get; set; } = "";
         public string AppName { get; set; } = "";
         public UpdateInfo? LastVersion { get; set; }
-        /// <summary>Update server app key for the standalone updater package (default: Updater).</summary>
-        public string UpdaterPackageAppName { get; set; } = "Updater";
         public bool AutoReboot { get; set; } = false;
         public bool ProgressFullscreen { get; set; } = true;
         public bool EnablePreReleaseVersions { get; set; } = false;
-
-        /// <summary>When true, app update checks ask the server to include updater self-update (default).</summary>
-        public bool IncludeSelfUpdateInCheck { get; set; } = true;
 
         public void Save()
         {
@@ -60,11 +55,9 @@ namespace Updater.Properties
             UpdateServer = fresh.UpdateServer;
             AppName = fresh.AppName;
             LastVersion = fresh.LastVersion;
-            UpdaterPackageAppName = fresh.UpdaterPackageAppName;
             AutoReboot = fresh.AutoReboot;
             ProgressFullscreen = fresh.ProgressFullscreen;
             EnablePreReleaseVersions = fresh.EnablePreReleaseVersions;
-            IncludeSelfUpdateInCheck = fresh.IncludeSelfUpdateInCheck;
         }
 
         private static Settings Load()
