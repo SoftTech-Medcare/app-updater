@@ -1,8 +1,40 @@
+using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
 namespace Updater.Services
 {
+    public class CheckUpgradeRequest
+    {
+        [JsonPropertyName("version")]
+        public string? Version { get; set; }
+
+        [JsonPropertyName("modified")]
+        public DateTimeOffset? Modified { get; set; }
+
+        [JsonPropertyName("checksum")]
+        public string? Checksum { get; set; }
+
+        /// <summary>Ask the server to include updater self-update in this check (default true).</summary>
+        [JsonPropertyName("includeSelfUpdate")]
+        public bool? IncludeSelfUpdate { get; set; }
+    }
+
+    public class SelfUpdateCheckInfo
+    {
+        [JsonPropertyName("available")]
+        public bool Available { get; set; }
+
+        [JsonPropertyName("currentVersion")]
+        public string? CurrentVersion { get; set; }
+
+        [JsonPropertyName("targetVersion")]
+        public string? TargetVersion { get; set; }
+
+        [JsonPropertyName("packageFile")]
+        public string? PackageFile { get; set; }
+    }
+
     public class UpgradeInfoWrapper
     {
         [JsonPropertyName("currentVersion")]
@@ -19,6 +51,9 @@ namespace Updater.Services
 
         [JsonPropertyName("requiresDownload")]
         public bool RequiresDownload { get; set; }
+
+        [JsonPropertyName("selfUpdate")]
+        public SelfUpdateCheckInfo? SelfUpdate { get; set; }
     }
 
     public class UpgradeSummary

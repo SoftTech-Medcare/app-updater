@@ -8,18 +8,29 @@ using Updater.Views;
 
 namespace Updater.ViewModels
 {
-    public class UpdateAvailableViewModel: ViewModelBase
+    public class UpdateAvailableViewModel : ViewModelBase
     {
-        private string currentVersion;
-        private string latestVersion;
+        private readonly string currentVersion;
+        private readonly string latestVersion;
+        private readonly string appStatusLine;
+        private readonly string selfUpdateLine;
 
         public ReactiveCommand<Unit, Unit> Confirm { get; }
         public ReactiveCommand<Unit, Unit> Cancel { get; }
 
-        public UpdateAvailableViewModel(string currentVersion, string latestVersion)
+        public UpdateAvailableViewModel(
+            string currentVersion,
+            string latestVersion,
+            bool applicationAlreadyUpToDate,
+            string selfUpdateLine)
         {
             this.currentVersion = currentVersion;
             this.latestVersion = latestVersion;
+            this.selfUpdateLine = selfUpdateLine?.Trim() ?? "";
+
+            appStatusLine = applicationAlreadyUpToDate
+                ? "Application is already on the latest version."
+                : "";
 
             Confirm = ReactiveCommand.Create(() =>
             {
@@ -45,7 +56,11 @@ namespace Updater.ViewModels
             Cancel = ReactiveCommand.Create(() => { });
         }
 
-        public string CurrentVersion { get => currentVersion; }
-        public string LatestVersion { get => latestVersion; }
+        public string CurrentVersion => currentVersion;
+        public string LatestVersion => latestVersion;
+        public string AppStatusLine => appStatusLine;
+        public bool HasAppStatusLine => !string.IsNullOrWhiteSpace(appStatusLine);
+        public string SelfUpdateLine => selfUpdateLine;
+        public bool HasSelfUpdateLine => !string.IsNullOrWhiteSpace(selfUpdateLine);
     }
 }
