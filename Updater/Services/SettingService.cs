@@ -70,12 +70,6 @@ namespace Updater.Services
                 case nameof(Settings.Default.EnablePreReleaseVersions):
                     Settings.Default.EnablePreReleaseVersions = Convert.ToBoolean(value);
                     break;
-                case nameof(Settings.Default.UpdaterPackageAppName):
-                    Settings.Default.UpdaterPackageAppName = value;
-                    break;
-                case nameof(Settings.Default.IncludeSelfUpdateInCheck):
-                    Settings.Default.IncludeSelfUpdateInCheck = Convert.ToBoolean(value);
-                    break;
                 default:
                     throw new Exception($"Unknown setting: {key}");
             }

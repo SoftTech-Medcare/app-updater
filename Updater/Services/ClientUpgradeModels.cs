@@ -15,7 +15,7 @@ namespace Updater.Services
         [JsonPropertyName("checksum")]
         public string? Checksum { get; set; }
 
-        /// <summary>Ask the server to include updater self-update in this check (default true).</summary>
+        /// <summary>Only used for legacy /check to distinguish app-only vs combined; omitted on check-upgrades.</summary>
         [JsonPropertyName("includeSelfUpdate")]
         public bool? IncludeSelfUpdate { get; set; }
     }

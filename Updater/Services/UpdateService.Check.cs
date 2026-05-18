@@ -13,6 +13,8 @@ namespace Updater.Services
 {
     public partial class UpdateService
     {
+        private const string UpdaterServerAppName = "Updater";
+
         private sealed class UpdateCheckOutcome
         {
             public bool AppNeedsUpdate { get; set; }
@@ -33,11 +35,10 @@ namespace Updater.Services
             var server = Settings.Default.UpdateServer.TrimEnd('/');
             var appName = Settings.Default.AppName;
             var includePreRelease = Settings.Default.EnablePreReleaseVersions;
-            var includeSelfUpdate = Settings.Default.IncludeSelfUpdateInCheck;
             var (version, lastMod, checksum) = GetCurrentVersionInfo();
             var probe = new VersionProbe(version, lastMod, checksum);
 
-            var outcome = await RunChecksAsync(server, appName, probe, includePreRelease, includeSelfUpdate);
+            var outcome = await RunChecksAsync(server, appName, probe, includePreRelease);
 
             SelfUpdateOnlyMode = SelfUpdateAdvertised && !outcome.AppNeedsUpdate;
             return !outcome.AppNeedsUpdate && !SelfUpdateAdvertised;
@@ -47,26 +48,25 @@ namespace Updater.Services
             string server,
             string appName,
             VersionProbe probe,
-            bool includePreRelease,
-            bool includeSelfUpdate)
+            bool includePreRelease)
         {
             var outcome = new UpdateCheckOutcome();
 
             if (!string.IsNullOrEmpty(probe.Version))
             {
-                await TryManifestCheckAsync(server, appName, probe, includePreRelease, includeSelfUpdate, outcome);
+                await TryManifestCheckAsync(server, appName, probe, includePreRelease, outcome);
             }
 
             if (!outcome.AppNeedsUpdate && !outcome.SkipLegacyCheck)
             {
-                var legacyOk = await TryLegacyCheckAsync(server, appName, probe, includePreRelease, includeSelfUpdate, outcome);
+                var legacyOk = await TryLegacyCheckAsync(server, appName, probe, includePreRelease, outcome);
                 if (!legacyOk)
                 {
                     return outcome;
                 }
             }
 
-            if (includeSelfUpdate && !SelfUpdateAdvertised && string.IsNullOrEmpty(probe.Version))
+            if (!SelfUpdateAdvertised && string.IsNullOrEmpty(probe.Version))
             {
                 await TrySelfUpdateFallbackAsync(server, includePreRelease);
             }
@@ -79,14 +79,13 @@ namespace Updater.Services
             string appName,
             VersionProbe probe,
             bool includePreRelease,
-            bool includeSelfUpdate,
             UpdateCheckOutcome outcome)
         {
             try
             {
                 using var client = CreateUpdateHttpClient();
                 var url = BuildUpdateUrl(server, appName, "check-upgrades", includePreRelease);
-                using var response = await client.PostAsJsonAsync(url, CreateCheckBody(probe, includeSelfUpdate));
+                using var response = await client.PostAsJsonAsync(url, CreateCheckBody(probe));
 
                 if (response.StatusCode == HttpStatusCode.OK)
                 {
@@ -124,7 +123,6 @@ namespace Updater.Services
             string appName,
             VersionProbe probe,
             bool includePreRelease,
-            bool includeSelfUpdate,
             UpdateCheckOutcome outcome)
         {
             var url = BuildUpdateUrl(server, appName, "check", includePreRelease);
@@ -134,7 +132,7 @@ namespace Updater.Services
             {
                 using var client = CreateUpdateHttpClient();
                 var upToDate = await PostLegacyCheckAsync(
-                    client, url, probe, includeSelfUpdate, onHttpError: code => statusCode = code);
+                    client, url, probe, onHttpError: code => statusCode = code);
 
                 if (upToDate == null)
                 {
@@ -153,9 +151,7 @@ namespace Updater.Services
 
                 UseManifestSystem = false;
                 CurrentUpgradeInfo = null;
-                outcome.AppNeedsUpdate = includeSelfUpdate
-                    ? await ResolveAppNeedsUpdateWhenLegacyReportsUpdateAsync(client, url, probe)
-                    : true;
+                outcome.AppNeedsUpdate = await ResolveAppNeedsUpdateWhenLegacyReportsUpdateAsync(client, url, probe);
                 return true;
             }
             catch (HttpRequestException)
@@ -174,7 +170,7 @@ namespace Updater.Services
             string legacyCheckUrl,
             VersionProbe probe)
         {
-            var appOnlyUpToDate = await PostLegacyCheckAsync(client, legacyCheckUrl, probe, includeSelfUpdate: false);
+            var appOnlyUpToDate = await PostLegacyCheckAsync(client, legacyCheckUrl, probe, includeSelfUpdateInRequest: false);
             if (appOnlyUpToDate != true)
             {
                 return true;
@@ -188,11 +184,11 @@ namespace Updater.Services
             HttpClient client,
             string url,
             VersionProbe probe,
-            bool includeSelfUpdate,
+            bool? includeSelfUpdateInRequest = null,
             Action<int>? onHttpError = null)
         {
             return await client.UsingRoute(url)
-                .WithJsonContent(CreateCheckBody(probe, includeSelfUpdate))
+                .WithJsonContent(CreateCheckBody(probe, includeSelfUpdateInRequest))
                 .WithRequestTimeout(5)
                 .PostAsync()
                 .OnFailureAsync(async res =>
@@ -291,7 +287,7 @@ namespace Updater.Services
                 : null;
         }
 
-        private static CheckUpgradeRequest CreateCheckBody(VersionProbe probe, bool includeSelfUpdate) =>
+        private static CheckUpgradeRequest CreateCheckBody(VersionProbe probe, bool? includeSelfUpdate = null) =>
             new()
             {
                 Version = probe.Version,
@@ -312,7 +308,7 @@ namespace Updater.Services
         {
             try
             {
-                var info = await GetLatestVersionInfoAsync(server, GetUpdaterPackageAppName(), includePreRelease);
+                var info = await GetLatestVersionInfoAsync(server, UpdaterServerAppName, includePreRelease);
                 var chosen = includePreRelease && info?.PreRelease != null ? info.PreRelease : info?.Stable;
                 if (chosen == null || string.IsNullOrWhiteSpace(chosen.Version))
                 {

@@ -17,11 +17,9 @@ namespace Updater.ViewModels
         private string appPath;
         private string server;
         private string appName;
-        private string updaterPackageAppName;
         private bool isFullscreen;
         private bool autoReboot;
         private bool enablePreReleaseVersions;
-        private bool includeSelfUpdateInCheck;
 
         public ICommand SaveConfig { get; }
         public ICommand Find { get; }
@@ -34,11 +32,9 @@ namespace Updater.ViewModels
             AppPath = Settings.Default.ClientAppPath;
             Server = Settings.Default.UpdateServer;
             AppName = Settings.Default.AppName;
-            UpdaterPackageAppName = Settings.Default.UpdaterPackageAppName;
             IsFullscreen = Settings.Default.ProgressFullscreen;
             AutoReboot = Settings.Default.AutoReboot;
             EnablePreReleaseVersions = Settings.Default.EnablePreReleaseVersions;
-            IncludeSelfUpdateInCheck = Settings.Default.IncludeSelfUpdateInCheck;
 
             SaveConfig = ReactiveCommand.Create(() =>
             {
@@ -46,11 +42,9 @@ namespace Updater.ViewModels
                 Settings.Default.ClientAppPath = AppPath;
                 Settings.Default.UpdateServer = string.IsNullOrWhiteSpace(Server) ? "" : (Regex.IsMatch(Server, @"^https?://") ? Server : "http://" + Server);
                 Settings.Default.AppName = AppName;
-                Settings.Default.UpdaterPackageAppName = string.IsNullOrWhiteSpace(UpdaterPackageAppName) ? "Updater" : UpdaterPackageAppName.Trim();
                 Settings.Default.ProgressFullscreen = IsFullscreen;
                 Settings.Default.AutoReboot = AutoReboot;
                 Settings.Default.EnablePreReleaseVersions = EnablePreReleaseVersions;
-                Settings.Default.IncludeSelfUpdateInCheck = IncludeSelfUpdateInCheck;
 
                 Settings.Default.Save();
                 Settings.Default.Reload();
@@ -72,12 +66,10 @@ namespace Updater.ViewModels
 
         public string AppPath { get => appPath; set => this.RaiseAndSetIfChanged(ref appPath, value); }
         public string AppName { get => appName; set => this.RaiseAndSetIfChanged(ref appName, value); }
-        public string UpdaterPackageAppName { get => updaterPackageAppName; set => this.RaiseAndSetIfChanged(ref updaterPackageAppName, value); }
         public string Server { get => server; set => this.RaiseAndSetIfChanged(ref server, value); }
         public bool IsFullscreen { get => isFullscreen; set => this.RaiseAndSetIfChanged(ref isFullscreen, value); }
         public bool AutoReboot { get => autoReboot; set => this.RaiseAndSetIfChanged(ref autoReboot, value); }
         public bool EnablePreReleaseVersions { get => enablePreReleaseVersions; set => this.RaiseAndSetIfChanged(ref enablePreReleaseVersions, value); }
-        public bool IncludeSelfUpdateInCheck { get => includeSelfUpdateInCheck; set => this.RaiseAndSetIfChanged(ref includeSelfUpdateInCheck, value); }
 
         public string UpdaterVersion => UpdateService.GetUpdaterVersion();
 
