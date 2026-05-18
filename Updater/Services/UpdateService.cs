@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Threading;
 using FluentHttpClient;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
@@ -18,11 +19,20 @@ using UpdaterLib;
 
 namespace Updater.Services
 {
-    public class UpdateService
+    public partial class UpdateService
     {
         public static bool AlreadyDownloaded = false;
         public static bool UseManifestSystem = false;
         public static UpgradeInfoWrapper? CurrentUpgradeInfo = null;
+
+        /// <summary>True when the update server has a newer Updater package than this running build.</summary>
+        public static bool SelfUpdateAdvertised = false;
+
+        /// <summary>True when only the updater package needs to be fetched (main app already current).</summary>
+        public static bool SelfUpdateOnlyMode = false;
+
+        public static string? SelfUpdateTargetVersion = null;
+        public static string? SelfUpdateTargetFileName = null;
 
         public class VersionInfo
         {
@@ -59,185 +69,97 @@ namespace Updater.Services
                 return null;
             }
 
-            var url = $"{server}/update/{appName}/latest-info?includePreRelease={includePreRelease}";
+            return await GetLatestVersionInfoAsync(server, appName, includePreRelease);
+        }
+
+        public static async Task<LatestVersionInfo?> GetLatestVersionInfoAsync(string server, string appName, bool includePreRelease)
+        {
+            if (string.IsNullOrWhiteSpace(server) || string.IsNullOrWhiteSpace(appName))
+            {
+                return null;
+            }
+
+            var url = $"{server.TrimEnd('/')}/update/{Uri.EscapeDataString(appName)}/latest-info?includePreRelease={includePreRelease}";
 
             try
             {
-                var client = new HttpClient(new HttpClientHandler
-                {
-                    AllowAutoRedirect = true,
-                    CheckCertificateRevocationList = false,
-                    ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-                });
-                
-                // Add User-Agent header for updater version detection
-                var updaterVersion = GetUpdaterVersion();
-                client.DefaultRequestHeaders.Add("User-Agent", $"AppUpdater/{updaterVersion}");
-                
+                using var client = CreateUpdateHttpClient();
                 var response = await client.UsingRoute(url)
                     .WithRequestTimeout(5)
                     .GetAsync()
                     .DeserializeJsonAsync<LatestVersionInfo>();
-                
+
                 return response;
             }
             catch (Exception ex)
             {
-                Logger.LogError($"Error getting latest version info: {ex.Message}");
+                Logger.LogError($"Error getting latest version info for '{appName}': {ex.Message}");
                 return null;
             }
         }
 
-        public async Task<bool> CheckUpdate()
+        private static HttpClient CreateUpdateHttpClient()
         {
-            var server = Settings.Default.UpdateServer;
-            var appName = Settings.Default.AppName;
-            var appFolder = Settings.Default.ClientAppPath;
-
-            // ================ Safe-Gaurd Init core config first ======================
-
-            bool exit = false;
-            if (string.IsNullOrWhiteSpace(server))
+            var client = new HttpClient(new HttpClientHandler
             {
-                await App.ShowAlert("Please config server URI first.");
-                exit = true;
-            }
-            else if (!Uri.TryCreate(server, UriKind.Absolute, out var uri))
-            {
-                await App.ShowAlert("The update server is not valid URI.");
-                exit = true;
-            }
-            if (string.IsNullOrWhiteSpace(appName))
-            {
-                await App.ShowAlert("Please config app name first.");
-                exit = true;
-            }
-            if (string.IsNullOrWhiteSpace(appFolder))
-            {
-                await App.ShowAlert("Please config the app folder path first.");
-                exit = true;
-            }
-
-            if (exit)
-            {
-                return false;
-            }
-
-            // ====================================================================
-
-            var (version, lastMod, checksum) = GetCurrentVersionInfo();
-            var currentFile = GetCurrentFile();
-            var lastVersion = Settings.Default.LastVersion;
-
-            var includePreRelease = Settings.Default.EnablePreReleaseVersions;
-            
-            // Try New Manifest System First
-            try 
-            {
-                // Only if we have a version to check from
-                if (!string.IsNullOrEmpty(version))
-                {
-                    var client = new HttpClient(new HttpClientHandler
-                    {
-                        AllowAutoRedirect = true,
-                        CheckCertificateRevocationList = false,
-                        ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-                    });
-                    
-                    var updaterVersion = GetUpdaterVersion();
-                    client.DefaultRequestHeaders.Add("User-Agent", $"AppUpdater/{updaterVersion}");
-
-                    var checkUpgradesUrl = $"{server}/update/{appName}/check-upgrades?includePrerelease={includePreRelease}";
-                    var response = await client.PostAsJsonAsync(checkUpgradesUrl, new { Version = version, Modified = lastMod, Checksum = checksum });
-                    
-                    if (response.StatusCode == HttpStatusCode.OK) 
-                    {
-                        var upgradeInfo = await response.Content.ReadFromJsonAsync<UpgradeInfoWrapper>();
-                        if (upgradeInfo != null && upgradeInfo.RequiresDownload)
-                        {
-                             UseManifestSystem = true;
-                             CurrentUpgradeInfo = upgradeInfo;
-                             Logger.LogInfo("New Manifest System: Upgrades available.");
-                             return false; // NOT up to date
-                        }
-                        // If OK but no upgrades needed, fall through to old system check
-                    }
-                    else if (response.StatusCode == HttpStatusCode.NoContent)
-                    {
-                        // Server confirmed no upgrades needed
-                        return true; // Up to date
-                    } 
-                    else if (response.StatusCode != HttpStatusCode.NotFound) 
-                    {
-                        // Some other error, log it but fall through to old system?
-                        Logger.LogError($"Check upgrades failed with {response.StatusCode}");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                 Logger.LogError($"Check upgrades exception: {ex.Message}");
-                 // Fallback to old system
-            }
-
-
-            // Fallback to Old System
-            var url = $"{server}/update/{appName}/check?includePreRelease={includePreRelease}";
-            
-            int statusCode = 0;
-            try
-            {
-                var client = new HttpClient(new HttpClientHandler
-                {
-                    AllowAutoRedirect = true,
-                    CheckCertificateRevocationList = false,
-                    ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-                });
-                
-                var updaterVersion = GetUpdaterVersion();
-                client.DefaultRequestHeaders.Add("User-Agent", $"AppUpdater/{updaterVersion}");
-                
-                var uptodate = await client.UsingRoute(url)
-                    .WithJsonContent(new { Version = version, Modified = lastMod, Checksum = checksum })
-                    .WithRequestTimeout(5)
-                    .PostAsync()
-                    .OnFailureAsync(async (res) =>
-                    {
-                        statusCode = (int)res.StatusCode;
-                        Logger.LogError($"error calling server ({statusCode}): {await res.GetResponseStringAsync()}");
-                        await App.ShowAlert($"Error on calling server ({statusCode}). Please contact administrator.");
-                    }, false)
-                    .DeserializeJsonAsync<bool>();
-
-                if (!uptodate)
-                {
-                    UseManifestSystem = false;
-                    return false;
-                }
-
-                // Server confirmed we're up to date, trust the server's response
-                // If there's a local file, mark it as already downloaded for potential future use
-                if (!string.IsNullOrWhiteSpace(currentFile))
-                {
-                    AlreadyDownloaded = true;
-                }
-
-                return true;
-            }
-            catch (HttpRequestException)
-            {
-                return false;
-            }
-            catch (Exception ex) when (
-                ex is TaskCanceledException ||
-                ex is TimeoutException
-            )
-            {
-                await App.ShowAlert($"Error on calling server ({statusCode}). Please contact administrator.");
-                return false;
-            }
+                AllowAutoRedirect = true,
+                CheckCertificateRevocationList = false,
+                ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            });
+            client.DefaultRequestHeaders.Add("User-Agent", $"AppUpdater/{GetUpdaterVersion()}");
+            return client;
         }
 
+        public static string GetUpdaterPackageAppName()
+        {
+            var name = Settings.Default.UpdaterPackageAppName?.Trim();
+            return string.IsNullOrWhiteSpace(name) ? "Updater" : name;
+        }
+
+        private static string BuildDownloadUrl(string server, string appName, bool includePreRelease)
+        {
+            var baseUrl = server.TrimEnd('/');
+            if (UseManifestSystem && CurrentUpgradeInfo != null)
+            {
+                var fromVersion = Uri.EscapeDataString(CurrentUpgradeInfo.CurrentVersion ?? "");
+                return $"{baseUrl}/update/{Uri.EscapeDataString(appName)}/download-upgrade?fromVersion={fromVersion}&includePrerelease={includePreRelease}&includeSelfUpdate={Settings.Default.IncludeSelfUpdateInCheck}";
+            }
+
+            var targetApp = SelfUpdateOnlyMode ? GetUpdaterPackageAppName() : appName;
+            return $"{baseUrl}/update/{Uri.EscapeDataString(targetApp)}/download?includePreRelease={includePreRelease}";
+        }
+
+        private static string ResolveDownloadFileName(HttpResponseMessage response)
+        {
+            var disposition = response.Content.Headers.ContentDisposition;
+            var fileName = disposition?.FileNameStar ?? disposition?.FileName;
+            if (!string.IsNullOrWhiteSpace(fileName))
+            {
+                return Path.GetFileName(fileName.Trim().Trim('"'));
+            }
+
+            if (UseManifestSystem)
+            {
+                return "upgrade-package.tar.gz";
+            }
+
+            if (SelfUpdateOnlyMode)
+            {
+                if (!string.IsNullOrWhiteSpace(SelfUpdateTargetFileName))
+                {
+                    return SelfUpdateTargetFileName;
+                }
+
+                if (!string.IsNullOrWhiteSpace(SelfUpdateTargetVersion))
+                {
+                    return $"updater-{SelfUpdateTargetVersion}.tar.gz";
+                }
+
+                return "updater-update.tar.gz";
+            }
+
+            return "unknown.gz";
+        }
 
         public delegate void OnProgress(long currentSize, long totalSize, float percent);
         public delegate void OnInstallProgress(long currentSize, long totalSize, float percent);
@@ -250,7 +172,7 @@ namespace Updater.Services
 
             // if already downloaded skip download again (Only for old system or if filename matches)
             string? currentFile = GetCurrentFile();
-            if (!UseManifestSystem && !string.IsNullOrWhiteSpace(currentFile) && AlreadyDownloaded)
+            if (!UseManifestSystem && !SelfUpdateOnlyMode && !string.IsNullOrWhiteSpace(currentFile) && AlreadyDownloaded)
             {
                 Console.WriteLine("Already downloaded, so skip and extract current file...");
                 var info = new FileInfo(currentFile);
@@ -263,34 +185,15 @@ namespace Updater.Services
             }
 
             var includePreRelease = Settings.Default.EnablePreReleaseVersions;
-            string url;
-            
-            if (UseManifestSystem && CurrentUpgradeInfo != null)
-            {
-                 url = $"{server}/update/{appName}/download-upgrade?fromVersion={CurrentUpgradeInfo.CurrentVersion}&includePrerelease={includePreRelease}";
-            }
-            else
-            {
-                 url = $"{server}/update/{appName}/download?includePreRelease={includePreRelease}";
-            }
+            var url = BuildDownloadUrl(server, appName, includePreRelease);
 
-            var handler = new HttpClientHandler();
-            handler.ServerCertificateCustomValidationCallback = delegate
-            {
-                return true;
-            };
-
-            var client = new HttpClient(handler);
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
-            
-            var updaterVersion = GetUpdaterVersion();
-            client.DefaultRequestHeaders.Add("User-Agent", $"AppUpdater/{updaterVersion}");
-
+            using var client = CreateUpdateHttpClient();
             using (var res = await client.GetAsync(url))
             {
                 long? totalToReceive = res.Content.Headers.ContentLength;
                 long totalDownloaded = 0;
-                string fileName = res.Content.Headers.ContentDisposition?.FileName ?? (UseManifestSystem ? "upgrade-package.tar.gz" : "unknown.gz");
+                var fileName = ResolveDownloadFileName(res);
                 var lastModified = res.Content.Headers.LastModified?.UtcDateTime ?? DateTime.UtcNow;
                 string filePath = Path.Combine(downloadPath, fileName);
                 using (var stream = await res.Content.ReadAsStreamAsync())
@@ -1109,6 +1012,14 @@ namespace Updater.Services
             {
             }
             return "1.0.0";
+        }
+
+        /// <summary>
+        /// Directory containing the running updater (publish output / install root).
+        /// </summary>
+        public static string GetUpdaterInstallDirectory()
+        {
+            return Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory);
         }
 
         private static void Chmod(string path, string permissions)

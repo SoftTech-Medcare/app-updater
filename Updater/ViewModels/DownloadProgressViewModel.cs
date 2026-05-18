@@ -1,4 +1,4 @@
-using ReactiveUI;
+﻿using ReactiveUI;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -57,9 +57,13 @@ namespace Updater.ViewModels
                     {
                         fromVersion = lastVersion.Version;
                     }
-                    
-                    // Get upgrade info if available
-                    if (UpdateService.UseManifestSystem && UpdateService.CurrentUpgradeInfo != null)
+
+                    if (UpdateService.SelfUpdateOnlyMode)
+                    {
+                        fromVersion = UpdateService.GetUpdaterVersion();
+                        toVersion = UpdateService.SelfUpdateTargetVersion;
+                    }
+                    else if (UpdateService.UseManifestSystem && UpdateService.CurrentUpgradeInfo != null)
                     {
                         fromVersion = UpdateService.CurrentUpgradeInfo.CurrentVersion;
                         toVersion = UpdateService.CurrentUpgradeInfo.TargetVersion;
@@ -139,7 +143,18 @@ namespace Updater.ViewModels
                         Message = "Starting extraction and installation"
                     });
                     
-                    var destination = Settings.Default.ClientAppPath;
+                    var destination = UpdateService.SelfUpdateOnlyMode
+                        ? Path.Combine(
+                            UpdateService.GetUpdaterInstallDirectory(),
+                            "pending-update",
+                            $"updater-{UpdateService.SelfUpdateTargetVersion ?? UpdateService.GetUpdaterVersion()}")
+                        : Settings.Default.ClientAppPath;
+
+                    if (UpdateService.SelfUpdateOnlyMode)
+                    {
+                        Directory.CreateDirectory(destination);
+                    }
+
                     var update = new UpdateService();
                     var extracted = await update.ExtractTarballFile(sourcePath, destination, OnExtractProgress, OnInstallProgress);
                     
@@ -181,7 +196,9 @@ namespace Updater.ViewModels
             var current = Helper.SizeSuffix(downloaded);
             var total = Helper.SizeSuffix(totalSize);
             ProgressTxt = $"{current}/{total}";
-            LabelTxt = $"Downloading Update... {percent / 100:P2}";
+            LabelTxt = UpdateService.SelfUpdateOnlyMode
+                ? $"Downloading App Updater... {percent / 100:P2}"
+                : $"Downloading Update... {percent / 100:P2}";
             Percent = percent;
         }
 
@@ -218,16 +235,32 @@ namespace Updater.ViewModels
                     
                     File.Delete(extracted);
                     var info = new FileInfo(sourcePath);
-                    var version = UpdateService.GetVersionFromFileName(info.Name);
+                    string? version = null;
+                    if (UpdateService.SelfUpdateOnlyMode)
+                    {
+                        version = UpdateService.SelfUpdateTargetVersion;
+                    }
+                    else if (UpdateService.UseManifestSystem && UpdateService.CurrentUpgradeInfo != null
+                        && !string.IsNullOrWhiteSpace(UpdateService.CurrentUpgradeInfo.TargetVersion))
+                    {
+                        version = UpdateService.CurrentUpgradeInfo.TargetVersion;
+                    }
+                    if (string.IsNullOrWhiteSpace(version))
+                    {
+                        version = UpdateService.GetVersionFromFileName(info.Name);
+                    }
                     Console.WriteLine($"modified: {info.LastWriteTimeUtc}");
 
-                    var newVersion = new UpdateInfo
+                    if (!UpdateService.SelfUpdateOnlyMode)
                     {
-                        Modified = info.LastWriteTimeUtc,
-                        Version = version
-                    };
-                    Settings.Default.LastVersion = newVersion;
-                    Settings.Default.Save();
+                        var newVersion = new UpdateInfo
+                        {
+                            Modified = info.LastWriteTimeUtc,
+                            Version = version
+                        };
+                        Settings.Default.LastVersion = newVersion;
+                        Settings.Default.Save();
+                    }
 
                     File.Delete(sourcePath);
 
@@ -236,7 +269,9 @@ namespace Updater.ViewModels
                         Timestamp = DateTimeOffset.Now,
                         Status = UpgradeStatus.Completed,
                         Stage = UpgradeStage.Cleanup,
-                        Message = $"Upgrade completed successfully. New version: {version}"
+                        Message = UpdateService.SelfUpdateOnlyMode
+                            ? $"Updater self-update staged successfully. Target: {version}"
+                            : $"Upgrade completed successfully. New version: {version}"
                     });
                     
                     // End upgrade session with success

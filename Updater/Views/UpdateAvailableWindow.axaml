@@ -8,18 +8,29 @@
 	<Viewbox>
 		<Panel VerticalAlignment="Center" HorizontalAlignment="Center">
 		
-			<StackPanel VerticalAlignment="Center" Spacing="30" Margin="30,10,30,10">
-				<StackPanel Spacing="10">
-					<TextBlock FontSize="16" FontWeight="Bold" HorizontalAlignment="Center">Version Information</TextBlock>
-					<StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="5">
-						<TextBlock>Current version:</TextBlock>
-						<TextBlock Text="{Binding CurrentVersion}" />
+				<StackPanel VerticalAlignment="Center" Spacing="30" Margin="30,10,30,10">
+					<StackPanel Spacing="10">
+						<TextBlock FontSize="16" FontWeight="Bold" HorizontalAlignment="Center">Version Information</TextBlock>
+						<TextBlock Text="{Binding AppStatusLine}"
+								   FontSize="14"
+								   TextWrapping="Wrap"
+								   HorizontalAlignment="Center"
+								   IsVisible="{Binding HasAppStatusLine}" />
+						<StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="5">
+							<TextBlock>Current version:</TextBlock>
+							<TextBlock Text="{Binding CurrentVersion}" />
+						</StackPanel>
+						<StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="5">
+							<TextBlock>Latest version:</TextBlock>
+							<TextBlock Text="{Binding LatestVersion}" FontWeight="Bold" />
+						</StackPanel>
+						<TextBlock Text="{Binding SelfUpdateLine}"
+								   FontSize="14"
+								   FontWeight="SemiBold"
+								   TextWrapping="Wrap"
+								   HorizontalAlignment="Center"
+								   IsVisible="{Binding HasSelfUpdateLine}" />
 					</StackPanel>
-					<StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="5">
-						<TextBlock>Latest version:</TextBlock>
-						<TextBlock Text="{Binding LatestVersion}" FontWeight="Bold" />
-					</StackPanel>
-				</StackPanel>
 
 				<Label FontSize="16" Classes="wrap" HorizontalAlignment="Center">New update is available. Do you want to download and install?</Label>
 				<StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="20">

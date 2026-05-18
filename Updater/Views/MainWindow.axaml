@@ -58,9 +58,14 @@
 							<Label VerticalContentAlignment="Center">Update Server:</Label>
 							<TextBox Text="{Binding Server}"></TextBox>
 						</DockPanel>
+						<DockPanel>
+							<Label VerticalContentAlignment="Center">Updater package name:</Label>
+							<TextBox Text="{Binding UpdaterPackageAppName}"></TextBox>
+						</DockPanel>
 						<CheckBox IsChecked="{Binding IsFullscreen}">Show in Fullscreen</CheckBox>
 						<CheckBox IsChecked="{Binding AutoReboot}">Auto reboot after finish</CheckBox>
 						<CheckBox IsChecked="{Binding EnablePreReleaseVersions}">Enable pre-release versions</CheckBox>
+						<CheckBox IsChecked="{Binding IncludeSelfUpdateInCheck}">Include updater self-update in app check</CheckBox>
 						<DockPanel>
 							<Label VerticalContentAlignment="Center">Updater Version:</Label>
 							<TextBlock Text="{Binding UpdaterVersion}" VerticalAlignment="Center" Margin="5,0,0,0" />

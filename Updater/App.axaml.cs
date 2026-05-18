@@ -78,8 +78,9 @@ namespace Updater
                                 {
                                     DataContext = new UpdateAvailableViewModel(
                                         currentVersion: GetCurrentVersion(),
-                                        latestVersion: await GetLatestVersionInfo(service)
-                                    )
+                                        latestVersion: await GetLatestVersionInfo(service),
+                                        applicationAlreadyUpToDate: UpdateService.SelfUpdateOnlyMode,
+                                        selfUpdateLine: UpdateService.GetSelfUpdateSummaryLine())
                                 };
                                 desktop.MainWindow.WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
