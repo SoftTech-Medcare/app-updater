@@ -1,6 +1,5 @@
 using Avalonia;
 using Avalonia.Threading;
-using FluentHttpClient;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -84,12 +83,14 @@ namespace Updater.Services
             try
             {
                 using var client = CreateUpdateHttpClient();
-                var response = await client.UsingRoute(url)
-                    .WithRequestTimeout(5)
-                    .GetAsync()
-                    .DeserializeJsonAsync<LatestVersionInfo>();
+                using var response = await client.GetAsync(url);
+                if (!response.IsSuccessStatusCode)
+                {
+                    Logger.LogError($"Error getting latest version info for '{appName}': HTTP {(int)response.StatusCode}");
+                    return null;
+                }
 
-                return response;
+                return await response.Content.ReadFromJsonAsync<LatestVersionInfo>();
             }
             catch (Exception ex)
             {
@@ -105,7 +106,10 @@ namespace Updater.Services
                 AllowAutoRedirect = true,
                 CheckCertificateRevocationList = false,
                 ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-            });
+            })
+            {
+                Timeout = TimeSpan.FromSeconds(5)
+            };
             client.DefaultRequestHeaders.Add("User-Agent", $"AppUpdater/{GetUpdaterVersion()}");
             return client;
         }

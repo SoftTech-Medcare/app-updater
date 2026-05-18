@@ -1,5 +1,4 @@
 using Avalonia;
-using FluentHttpClient;
 using System;
 using System.Linq;
 using System.Net;
@@ -102,7 +101,14 @@ namespace Updater.Services
                         CurrentUpgradeInfo = info;
                         ApplySelfUpdateFromResponse(info);
                         outcome.AppNeedsUpdate = HasApplicationUpgrade(info.Upgrades);
+                        outcome.SkipLegacyCheck = true;
                     }
+                    else
+                    {
+                        ClearSelfUpdateState();
+                        outcome.SkipLegacyCheck = true;
+                    }
+
                     return;
                 }
 
@@ -137,9 +143,7 @@ namespace Updater.Services
 
             try
             {
-                using var client = CreateUpdateHttpClient();
-                var upToDate = await PostLegacyCheckAsync(
-                    client, url, probe, onHttpError: code => statusCode = code);
+                var upToDate = await PostLegacyCheckAsync(url, probe, onHttpError: code => statusCode = code);
 
                 if (upToDate == null)
                 {
@@ -158,7 +162,7 @@ namespace Updater.Services
 
                 UseManifestSystem = false;
                 CurrentUpgradeInfo = null;
-                outcome.AppNeedsUpdate = await ResolveAppNeedsUpdateWhenLegacyReportsUpdateAsync(client, url, probe);
+                outcome.AppNeedsUpdate = await ResolveAppNeedsUpdateWhenLegacyReportsUpdateAsync(url, probe);
                 return true;
             }
             catch (HttpRequestException)
@@ -173,11 +177,10 @@ namespace Updater.Services
         }
 
         private static async Task<bool> ResolveAppNeedsUpdateWhenLegacyReportsUpdateAsync(
-            HttpClient client,
             string legacyCheckUrl,
             VersionProbe probe)
         {
-            var appOnlyUpToDate = await PostLegacyCheckAsync(client, legacyCheckUrl, probe, includeSelfUpdateInRequest: false);
+            var appOnlyUpToDate = await PostLegacyCheckAsync(legacyCheckUrl, probe, includeSelfUpdateInRequest: false);
             if (appOnlyUpToDate != true)
             {
                 return true;
@@ -188,23 +191,25 @@ namespace Updater.Services
         }
 
         private static async Task<bool?> PostLegacyCheckAsync(
-            HttpClient client,
             string url,
             VersionProbe probe,
             bool? includeSelfUpdateInRequest = null,
             Action<int>? onHttpError = null)
         {
-            return await client.UsingRoute(url)
-                .WithJsonContent(CreateCheckBody(probe, includeSelfUpdateInRequest))
-                .WithRequestTimeout(5)
-                .PostAsync()
-                .OnFailureAsync(async res =>
-                {
-                    onHttpError?.Invoke((int)res.StatusCode);
-                    Logger.LogError($"error calling server ({(int)res.StatusCode}): {await res.GetResponseStringAsync()}");
-                    await App.ShowAlert($"Error on calling server ({(int)res.StatusCode}). Please contact administrator.");
-                }, false)
-                .DeserializeJsonAsync<bool>();
+            using var client = CreateUpdateHttpClient();
+            using var response = await client.PostAsJsonAsync(url, CreateCheckBody(probe, includeSelfUpdateInRequest));
+
+            if (!response.IsSuccessStatusCode)
+            {
+                onHttpError?.Invoke((int)response.StatusCode);
+                Logger.LogError(
+                    $"error calling server ({(int)response.StatusCode}): {await response.Content.ReadAsStringAsync()}");
+                await App.ShowAlert(
+                    $"Error on calling server ({(int)response.StatusCode}). Please contact administrator.");
+                return null;
+            }
+
+            return await response.Content.ReadFromJsonAsync<bool>();
         }
 
         private static async Task<bool> ValidateCheckConfigurationAsync()
