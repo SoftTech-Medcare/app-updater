@@ -117,15 +117,21 @@ namespace Updater.Services
         private static string BuildDownloadUrl(string server, string appName, bool includePreRelease)
         {
             var baseUrl = server.TrimEnd('/');
+            const string updaterApp = "Updater";
+
+            // Self-update always uses the standalone Updater publish tarball, not the app's download-upgrade bundle.
+            if (SelfUpdateOnlyMode)
+            {
+                return $"{baseUrl}/update/{Uri.EscapeDataString(updaterApp)}/download?includePreRelease={includePreRelease}";
+            }
+
             if (UseManifestSystem && CurrentUpgradeInfo != null)
             {
                 var fromVersion = Uri.EscapeDataString(CurrentUpgradeInfo.CurrentVersion ?? "");
                 return $"{baseUrl}/update/{Uri.EscapeDataString(appName)}/download-upgrade?fromVersion={fromVersion}&includePrerelease={includePreRelease}";
             }
 
-            const string updaterApp = "Updater";
-            var targetApp = SelfUpdateOnlyMode ? updaterApp : appName;
-            return $"{baseUrl}/update/{Uri.EscapeDataString(targetApp)}/download?includePreRelease={includePreRelease}";
+            return $"{baseUrl}/update/{Uri.EscapeDataString(appName)}/download?includePreRelease={includePreRelease}";
         }
 
         private static string ResolveDownloadFileName(HttpResponseMessage response)
@@ -235,6 +241,39 @@ namespace Updater.Services
             }
         }
 
+        /// <summary>
+        /// After a combined app upgrade, ensure updater self-update is staged under pending-update
+        /// even if the bundle step failed (downloads standalone Updater when needed).
+        /// </summary>
+        public async Task StageSelfUpdateIfNeededAsync(OnProgress onExtractProgress, OnInstallProgress onInstallProgress)
+        {
+            if (!SelfUpdateAdvertised)
+            {
+                return;
+            }
+
+            var pendingDir = GetSelfUpdatePendingDirectory();
+            if (Directory.Exists(pendingDir) && Directory.EnumerateFileSystemEntries(pendingDir).Any())
+            {
+                Logger.LogUpgradeOutput($"Self-update already staged at {pendingDir}");
+                return;
+            }
+
+            Logger.LogUpgradeOutput("Self-update not staged from app bundle; downloading standalone Updater package...");
+            var wasSelfOnly = SelfUpdateOnlyMode;
+            try
+            {
+                SelfUpdateOnlyMode = true;
+                var tarball = await Download(onExtractProgress);
+                Directory.CreateDirectory(pendingDir);
+                await ExtractTarballFile(tarball, pendingDir, onExtractProgress, onInstallProgress);
+            }
+            finally
+            {
+                SelfUpdateOnlyMode = wasSelfOnly;
+            }
+        }
+
         public async Task<string> ExtractTarballFile(string filePath, string destinationPath, OnProgress onExtractProgress, OnInstallProgress onInstallProgress)
         {
             Logger.LogUpgradeOutput($"=== Starting ExtractTarballFile ===");
@@ -309,15 +348,25 @@ namespace Updater.Services
             
             Logger.LogUpgradeOutput("Tar extraction completed");
             
-            // CHECK FOR UPGRADE PACKAGE
             var packageManifestPath = Path.Combine(destinationPath, "package-manifest.json");
-            if (File.Exists(packageManifestPath))
+            if (SelfUpdateOnlyMode)
+            {
+                if (File.Exists(packageManifestPath))
+                {
+                    Logger.LogUpgradeOutput("Self-update: unpacking updater archive from legacy upgrade bundle...");
+                    await ApplySelfUpdateFromUpgradePackageAsync(destinationPath);
+                }
+                else
+                {
+                    Logger.LogUpgradeOutput("Self-update: Updater tarball extracted to pending-update");
+                }
+            }
+            else if (File.Exists(packageManifestPath))
             {
                 Logger.LogUpgradeOutput("Manifest package detected. Reading package manifest...");
                 try
                 {
-                    var manifestJson = await File.ReadAllTextAsync(packageManifestPath);
-                    var packageManifest = System.Text.Json.JsonSerializer.Deserialize<UpgradePackageManifest>(manifestJson);
+                    var packageManifest = DeserializeJsonFile<UpgradePackageManifest>(packageManifestPath);
                     if (packageManifest != null)
                     {
                         fromVersion = packageManifest.FromVersion;
@@ -333,7 +382,6 @@ namespace Updater.Services
                 Console.WriteLine("Manifest package detected. Applying upgrades...");
                 Logger.LogUpgradeOutput("Applying upgrades from manifest package...");
                 await ApplyUpgrades(destinationPath, packageManifestPath);
-                // Clean up? ApplyUpgrades handles it.
             }
             else
             {
@@ -344,6 +392,124 @@ namespace Updater.Services
             return extractedFile;
         }
 
+        /// <summary>
+        /// Legacy download-upgrade bundles nest the Updater .tar.gz under upgrades/updater-self-update-*.
+        /// Unpack without parsing manifest JSON (avoids tar padding/null-byte JSON issues).
+        /// </summary>
+        private static async Task ApplySelfUpdateFromUpgradePackageAsync(string destinationPath)
+        {
+            var upgradesDir = Path.Combine(destinationPath, "upgrades");
+            if (!Directory.Exists(upgradesDir))
+            {
+                throw new DirectoryNotFoundException($"Self-update upgrades folder not found: {upgradesDir}");
+            }
+
+            var applied = false;
+            foreach (var upgradeDir in Directory.GetDirectories(upgradesDir))
+            {
+                var upgradeId = Path.GetFileName(upgradeDir);
+                if (!IsSelfUpdateUpgradeId(upgradeId))
+                {
+                    continue;
+                }
+
+                await ApplySelfUpdateUpgradeDirectoryAsync(upgradeDir, upgradeId);
+                applied = true;
+            }
+
+            if (!applied)
+            {
+                throw new FileNotFoundException("No updater .tar.gz found in self-update upgrade package");
+            }
+
+            var packageManifestPath = Path.Combine(destinationPath, "package-manifest.json");
+            if (File.Exists(packageManifestPath))
+            {
+                File.Delete(packageManifestPath);
+            }
+
+            if (Directory.Exists(upgradesDir))
+            {
+                Directory.Delete(upgradesDir, true);
+            }
+
+            var outerTar = Directory.GetFiles(destinationPath, "*.tar")
+                .Concat(Directory.GetFiles(destinationPath, "*.tar.gz"))
+                .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}upgrades{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+                .ToList();
+            foreach (var leftover in outerTar)
+            {
+                try
+                {
+                    File.Delete(leftover);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogUpgradeOutput($"Warning: could not delete leftover archive {leftover}: {ex.Message}");
+                }
+            }
+        }
+
+        private static T? DeserializeJsonFile<T>(string path) => JsonFileReader.Read<T>(path);
+
+        private static string ResolveInstallTargetPath(string appDestinationPath, string? fileTarget, bool isSelfUpdateUpgrade)
+        {
+            if (string.IsNullOrWhiteSpace(fileTarget))
+            {
+                return appDestinationPath;
+            }
+
+            if (Path.IsPathRooted(fileTarget))
+            {
+                return fileTarget;
+            }
+
+            if (isSelfUpdateUpgrade)
+            {
+                return Path.Combine(GetUpdaterInstallDirectory(), fileTarget);
+            }
+
+            return Path.Combine(appDestinationPath, fileTarget);
+        }
+
+        private static async Task ApplySelfUpdateUpgradeDirectoryAsync(string upgradePath, string? upgradeId)
+        {
+            var version = ParseSelfUpdateVersionFromId(upgradeId) ?? SelfUpdateTargetVersion ?? GetUpdaterVersion();
+            var pendingDir = GetSelfUpdatePendingDirectory(version);
+            Directory.CreateDirectory(pendingDir);
+
+            var archives = Directory.GetFiles(upgradePath, "*.tar.gz");
+            if (archives.Length == 0)
+            {
+                throw new FileNotFoundException($"No updater archive in {upgradePath}");
+            }
+
+            foreach (var archive in archives)
+            {
+                Logger.LogUpgradeOutput($"Self-update: extracting {archive} -> {pendingDir}");
+                using var fs = File.OpenRead(archive);
+                using var gzip = new GZipStream(fs, CompressionMode.Decompress);
+                await ExtractTar(gzip, pendingDir);
+            }
+        }
+
+        private static async Task ApplyAppUpdateFromDirectoryAsync(string upgradePath, string destinationPath)
+        {
+            var archives = Directory.GetFiles(upgradePath, "*.tar.gz");
+            if (archives.Length == 0)
+            {
+                throw new FileNotFoundException($"No app update archive in {upgradePath}");
+            }
+
+            foreach (var archive in archives)
+            {
+                Logger.LogUpgradeOutput($"App update: extracting {archive} -> {destinationPath}");
+                using var fs = File.OpenRead(archive);
+                using var gzip = new GZipStream(fs, CompressionMode.Decompress);
+                await ExtractTar(gzip, destinationPath);
+            }
+        }
+
         private async Task ApplyUpgrades(string destinationPath, string packageManifestPath)
         {
             try 
@@ -352,8 +518,7 @@ namespace Updater.Services
                 Logger.LogUpgradeOutput($"Package manifest path: {packageManifestPath}");
                 Logger.LogUpgradeOutput($"Destination path: {destinationPath}");
 
-                var json = await File.ReadAllTextAsync(packageManifestPath);
-                var manifest = System.Text.Json.JsonSerializer.Deserialize<UpgradePackageManifest>(json);
+                var manifest = DeserializeJsonFile<UpgradePackageManifest>(packageManifestPath);
                 if (manifest == null || manifest.Upgrades == null) 
                 {
                     Logger.LogUpgradeOutput("No upgrades found in manifest");
@@ -366,37 +531,67 @@ namespace Updater.Services
                 
                 var upgradesDir = Path.Combine(destinationPath, "upgrades");
 
-                foreach (var upgradeId in manifest.Upgrades)
+                // Install app (and intermediate) upgrades before staging updater self-update.
+                var orderedUpgradeIds = manifest.Upgrades
+                    .OrderBy(id => IsSelfUpdateUpgradeId(id) ? 1 : 0)
+                    .ToList();
+
+                foreach (var upgradeId in orderedUpgradeIds)
                 {
                     Logger.LogUpgradeOutput($"\n--- Processing upgrade: {upgradeId} ---");
                     
-                    // Find upgrade folder
                     var upgradePath = Path.Combine(upgradesDir, upgradeId);
-                    var upgradeManifestPath = Path.Combine(upgradePath, "manifest.json");
-
-                    if (!File.Exists(upgradeManifestPath))
+                    if (!Directory.Exists(upgradePath))
                     {
-                        var errorMsg = $"Manifest for upgrade {upgradeId} not found at {upgradeManifestPath}";
+                        var errorMsg = $"Upgrade folder not found: {upgradePath}";
                         Logger.LogError(errorMsg);
+                        throw new DirectoryNotFoundException(errorMsg);
+                    }
+
+                    if (IsSelfUpdateUpgradeId(upgradeId))
+                    {
                         Logger.LogUpgradeEvent(new UpgradeLog
                         {
                             Timestamp = DateTimeOffset.Now,
                             UpgradeId = upgradeId,
-                            Status = UpgradeStatus.Failed,
+                            Status = UpgradeStatus.Started,
                             Stage = UpgradeStage.Install,
-                            Message = errorMsg,
-                            Error = errorMsg
+                            Message = "Staging updater self-update"
                         });
+
+                        await ApplySelfUpdateUpgradeDirectoryAsync(upgradePath, upgradeId);
+
+                        Logger.LogUpgradeEvent(new UpgradeLog
+                        {
+                            Timestamp = DateTimeOffset.Now,
+                            UpgradeId = upgradeId,
+                            Status = UpgradeStatus.Completed,
+                            Stage = UpgradeStage.Install,
+                            Message = $"Updater staged at {GetSelfUpdatePendingDirectory(ParseSelfUpdateVersionFromId(upgradeId))}"
+                        });
+                        Logger.LogUpgradeOutput($"Self-update staged: {upgradeId}");
                         continue;
                     }
 
-                    var upgradeManifestJson = await File.ReadAllTextAsync(upgradeManifestPath);
-                    var upgradeManifest = System.Text.Json.JsonSerializer.Deserialize<UpgradeManifest>(upgradeManifestJson);
-                    
-                    if (upgradeManifest == null) 
+                    var upgradeManifestPath = Path.Combine(upgradePath, "manifest.json");
+                    UpgradeManifest? upgradeManifest = null;
+                    if (File.Exists(upgradeManifestPath))
                     {
-                        Logger.LogUpgradeOutput($"Failed to parse manifest for {upgradeId}");
-                        continue;
+                        upgradeManifest = DeserializeJsonFile<UpgradeManifest>(upgradeManifestPath);
+                    }
+
+                    if (upgradeManifest == null)
+                    {
+                        if (upgradeId.StartsWith("app-update", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Logger.LogUpgradeOutput($"Manifest unreadable for {upgradeId}; extracting app archive directly");
+                            await ApplyAppUpdateFromDirectoryAsync(upgradePath, destinationPath);
+                            continue;
+                        }
+
+                        var parseError = $"Failed to parse manifest for {upgradeId}";
+                        Logger.LogError(parseError);
+                        throw new InvalidOperationException(parseError);
                     }
                     
                     Logger.LogUpgradeEvent(new UpgradeLog
@@ -459,7 +654,10 @@ namespace Updater.Services
                             if (string.IsNullOrEmpty(file.Path)) continue;
                             
                             var sourceFile = Path.Combine(upgradePath, file.Path);
-                            var targetPath = Path.Combine(destinationPath, file.Target ?? "");
+                            var targetPath = ResolveInstallTargetPath(
+                                destinationPath,
+                                file.Target,
+                                IsSelfUpdateUpgradeId(upgradeId));
                             
                             Logger.LogUpgradeOutput($"Installing file: {file.Path} -> {targetPath}");
                             

@@ -144,10 +144,7 @@ namespace Updater.ViewModels
                     });
                     
                     var destination = UpdateService.SelfUpdateOnlyMode
-                        ? Path.Combine(
-                            UpdateService.GetUpdaterInstallDirectory(),
-                            "pending-update",
-                            $"updater-{UpdateService.SelfUpdateTargetVersion ?? UpdateService.GetUpdaterVersion()}")
+                        ? UpdateService.GetSelfUpdatePendingDirectory()
                         : Settings.Default.ClientAppPath;
 
                     if (UpdateService.SelfUpdateOnlyMode)
@@ -157,6 +154,11 @@ namespace Updater.ViewModels
 
                     var update = new UpdateService();
                     var extracted = await update.ExtractTarballFile(sourcePath, destination, OnExtractProgress, OnInstallProgress);
+
+                    if (!UpdateService.SelfUpdateOnlyMode && UpdateService.SelfUpdateAdvertised)
+                    {
+                        await update.StageSelfUpdateIfNeededAsync(OnExtractProgress, OnInstallProgress);
+                    }
                     
                     Logger.LogUpgradeEvent(new UpgradeLog
                     {
