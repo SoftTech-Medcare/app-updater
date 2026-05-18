@@ -41,8 +41,14 @@ namespace Updater.Services
             var outcome = await RunChecksAsync(server, appName, probe, includePreRelease);
 
             SelfUpdateOnlyMode = SelfUpdateAdvertised && !outcome.AppNeedsUpdate;
-            return !outcome.AppNeedsUpdate && !SelfUpdateAdvertised;
+
+            // Stdout / UI contract (HemoBox, HemoCheckIn): true only when app AND updater are current.
+            // false → UpdateAvailableWindow (or force download); true → "Already Up-To-Date" + exit.
+            return IsFullyUpToDate(outcome);
         }
+
+        private static bool IsFullyUpToDate(UpdateCheckOutcome outcome) =>
+            !outcome.AppNeedsUpdate && !SelfUpdateAdvertised;
 
         private async Task<UpdateCheckOutcome> RunChecksAsync(
             string server,
@@ -102,6 +108,7 @@ namespace Updater.Services
 
                 if (response.StatusCode == HttpStatusCode.NoContent)
                 {
+                    ClearSelfUpdateState();
                     outcome.SkipLegacyCheck = true;
                     return;
                 }

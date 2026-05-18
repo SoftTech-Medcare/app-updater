@@ -55,7 +55,7 @@ namespace Updater
                             throw;
                         }
 
-                        // 1st output : Detect output as bool in target app (the calling app)
+                        // 1st output: true = fully up to date (no app or updater update). false = show update UI.
                         Console.Out.WriteLine(upToDate);
 
                         if (!upToDate && !error)
