@@ -79,6 +79,10 @@ namespace Updater.Utils
         public static string SanitizeTarEntryRelativePath(string fileName)
         {
             fileName = fileName.Replace('\\', '/').TrimStart('/');
+            while (fileName.StartsWith("./", StringComparison.Ordinal))
+            {
+                fileName = fileName[2..];
+            }
             var invalid = Path.GetInvalidFileNameChars();
             var segments = fileName.Split('/', StringSplitOptions.RemoveEmptyEntries);
             var safeSegments = segments.Select(s =>
