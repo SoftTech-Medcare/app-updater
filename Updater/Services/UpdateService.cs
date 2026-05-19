@@ -82,7 +82,7 @@ namespace Updater.Services
 
             try
             {
-                using var client = CreateUpdateHttpClient();
+                using var client = CreateCheckHttpClient();
                 using var response = await client.GetAsync(url);
                 if (!response.IsSuccessStatusCode)
                 {
@@ -99,7 +99,13 @@ namespace Updater.Services
             }
         }
 
-        private static HttpClient CreateUpdateHttpClient()
+        /// <summary>Version checks and small JSON calls (update server on LAN or WAN).</summary>
+        private static readonly TimeSpan CheckHttpTimeout = TimeSpan.FromSeconds(60);
+
+        /// <summary>Full package downloads (app + updater tarballs can be large on slow links).</summary>
+        private static readonly TimeSpan DownloadHttpTimeout = TimeSpan.FromMinutes(30);
+
+        private static HttpClient CreateUpdateHttpClient(TimeSpan timeout)
         {
             var client = new HttpClient(new HttpClientHandler
             {
@@ -108,11 +114,15 @@ namespace Updater.Services
                 ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
             })
             {
-                Timeout = TimeSpan.FromSeconds(5)
+                Timeout = timeout
             };
             client.DefaultRequestHeaders.Add("User-Agent", $"AppUpdater/{GetUpdaterVersion()}");
             return client;
         }
+
+        private static HttpClient CreateCheckHttpClient() => CreateUpdateHttpClient(CheckHttpTimeout);
+
+        private static HttpClient CreateDownloadHttpClient() => CreateUpdateHttpClient(DownloadHttpTimeout);
 
         private static string BuildDownloadUrl(string server, string appName, bool includePreRelease)
         {
@@ -177,7 +187,8 @@ namespace Updater.Services
 
             // if already downloaded skip download again (Only for old system or if filename matches)
             string? currentFile = GetCurrentFile();
-            if (!UseManifestSystem && !SelfUpdateOnlyMode && !string.IsNullOrWhiteSpace(currentFile) && AlreadyDownloaded)
+            if (!UseManifestSystem && !SelfUpdateOnlyMode && !SelfUpdateAdvertised
+                && !string.IsNullOrWhiteSpace(currentFile) && AlreadyDownloaded)
             {
                 Console.WriteLine("Already downloaded, so skip and extract current file...");
                 var info = new FileInfo(currentFile);
@@ -193,8 +204,8 @@ namespace Updater.Services
             var url = BuildDownloadUrl(server, appName, includePreRelease);
 
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
-            using var client = CreateUpdateHttpClient();
-            using (var res = await client.GetAsync(url))
+            using var client = CreateDownloadHttpClient();
+            using (var res = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
             {
                 long? totalToReceive = res.Content.Headers.ContentLength;
                 long totalDownloaded = 0;
@@ -259,7 +270,10 @@ namespace Updater.Services
                 return;
             }
 
-            Logger.LogUpgradeOutput("Self-update not staged from app bundle; downloading standalone Updater package...");
+            Logger.LogUpgradeOutput(
+                "Self-update not staged from app bundle; downloading standalone Updater package. " +
+                "Common causes: legacy /download (no manifest bundle), missing User-Agent AppUpdater/x.y.z on server build, " +
+                "or no updater-self-update-* folder in the upgrade package.");
             var wasSelfOnly = SelfUpdateOnlyMode;
             try
             {
