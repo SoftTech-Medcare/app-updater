@@ -60,12 +60,18 @@ namespace Updater
 
                         if (!upToDate && !error)
                         {
+                            // Keep the process alive when swapping UpdateAvailable → DownloadProgress.
+                            desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
                             if (commanlineArgs.Any(x => x.Replace("-", "") == "force" || x.Replace("-", "") == "f"))
                             {
-                                desktop.MainWindow = new DownloadProgressWindow();
-                                desktop.MainWindow.DataContext = new DownloadProgressViewModel();
-                                desktop.MainWindow.Topmost = true;
-                                desktop.MainWindow.Show();
+                                var progressWindow = new DownloadProgressWindow(new DownloadProgressViewModel())
+                                {
+                                    Topmost = true
+                                };
+                                desktop.MainWindow = progressWindow;
+                                progressWindow.Show();
+                                progressWindow.Activate();
 
                                 if (Settings.Default.ProgressFullscreen)
                                 {

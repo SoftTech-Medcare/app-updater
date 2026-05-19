@@ -16,13 +16,43 @@ namespace Updater.Views
 {
     public partial class DownloadProgressWindow : ReactiveWindow<DownloadProgressViewModel>
     {
+        private bool pipelineStarted;
+
         public DownloadProgressWindow()
+            : this(new DownloadProgressViewModel())
         {
+        }
+
+        public DownloadProgressWindow(DownloadProgressViewModel viewModel)
+        {
+            DataContext = viewModel;
             InitializeComponent();
 #if DEBUG
             this.AttachDevTools();
 #endif
-            this.WhenActivated(d => d(ViewModel!.StartDownload().Subscribe(OnDownloadCompleted)));
+            Opened += OnWindowOpened;
+        }
+
+        private void OnWindowOpened(object? sender, EventArgs e)
+        {
+            StartUpgradePipelineIfNeeded();
+        }
+
+        private void StartUpgradePipelineIfNeeded()
+        {
+            if (pipelineStarted || ViewModel == null)
+            {
+                return;
+            }
+
+            pipelineStarted = true;
+            ViewModel.StartDownload().Subscribe(
+                OnDownloadCompleted,
+                ex =>
+                {
+                    Logger.LogError("Download pipeline error", ex);
+                    ViewModel?.MarkPipelineFailed("Download", ex.Message);
+                });
         }
 
         private void OnDownloadCompleted(UpgradeStepResult downloadResult)
@@ -32,7 +62,12 @@ namespace Updater.Views
                 return;
             }
 
-            ViewModel!.StartExtract(downloadResult.PackagePath!).Subscribe(OnExtractCompleted);
+            Dispatcher.UIThread.Post(() =>
+            {
+                ViewModel?.StartExtract(downloadResult.PackagePath!).Subscribe(
+                OnExtractCompleted,
+                ex => ViewModel?.MarkPipelineFailed("Installation", ex.Message));
+            });
         }
 
         private void OnExtractCompleted(UpgradeStepResult extractResult)
@@ -42,7 +77,12 @@ namespace Updater.Views
                 return;
             }
 
-            ViewModel!.CleanAndFinish(extractResult).Subscribe(OnCleanupCompleted);
+            Dispatcher.UIThread.Post(() =>
+            {
+                ViewModel?.CleanAndFinish(extractResult).Subscribe(
+                    OnCleanupCompleted,
+                    ex => ViewModel?.MarkPipelineFailed("Cleanup", ex.Message));
+            });
         }
 
         private void OnCleanupCompleted(UpgradeStepResult cleanupResult)
@@ -62,6 +102,7 @@ namespace Updater.Views
                 ViewModel?.MarkUpgradeComplete();
 
                 Console.Out.WriteLine("!!Finish!!");
+                Console.Out.Flush();
 
                 if (Settings.Default.AutoReboot)
                 {
