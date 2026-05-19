@@ -332,7 +332,8 @@ namespace Updater.Services
                 long lastDownloadProgressMs = 0;
                 await ExtractTar(unzipped, destinationPath, (c, t, p) =>
                 {
-                    onInstallProgress?.Invoke(c, t, p);
+                    ReportProgressOnUiThread(onInstallProgress, c, t, p);
+
                     var now = Environment.TickCount64;
                     if (compressedTotal <= 0 || now - lastDownloadProgressMs < ExtractProgressThrottleMs)
                     {
@@ -343,9 +344,17 @@ namespace Updater.Services
                     var extractPercent = (float)Math.Min(
                         100.0,
                         (double)progressStream.BytesRead / compressedTotal * 100);
-                    onExtractProgress?.Invoke(progressStream.BytesRead, compressedTotal, extractPercent);
+                    ReportProgressOnUiThread(
+                        onExtractProgress,
+                        progressStream.BytesRead,
+                        compressedTotal,
+                        extractPercent);
                 });
-                onExtractProgress?.Invoke(progressStream.BytesRead, compressedTotal, 100f);
+                ReportProgressOnUiThread(
+                    onExtractProgress,
+                    progressStream.BytesRead,
+                    compressedTotal,
+                    100f);
             }
 
             var extractedFiles = Directory.Exists(destinationPath)
@@ -1055,6 +1064,30 @@ namespace Updater.Services
             return skipped;
         }
 
+        private static void ReportProgressOnUiThread(OnProgress? onProgress, long current, long total, float percent)
+        {
+            if (onProgress == null)
+            {
+                return;
+            }
+
+            Dispatcher.UIThread.Post(() => onProgress(current, total, percent));
+        }
+
+        private static void ReportProgressOnUiThread(
+            OnInstallProgress? onProgress,
+            long current,
+            long total,
+            float percent)
+        {
+            if (onProgress == null)
+            {
+                return;
+            }
+
+            Dispatcher.UIThread.Post(() => onProgress(current, total, percent));
+        }
+
         private static void ReportExtractProgress(
             OnProgress? onProgress,
             ref long lastReportMs,
@@ -1074,7 +1107,7 @@ namespace Updater.Services
             }
 
             lastReportMs = now;
-            Dispatcher.UIThread.Post(() => onProgress(current, total, percent));
+            ReportProgressOnUiThread(onProgress, current, total, percent);
         }
 
         public static async Task ExtractTar(Stream stream, string outputDir, OnProgress? onProgress = null)

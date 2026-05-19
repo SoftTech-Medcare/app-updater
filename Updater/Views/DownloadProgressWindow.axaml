@@ -13,23 +13,34 @@
 	<Panel>
 		<Viewbox IsVisible="{Binding !IsFailed}">
 			<Panel VerticalAlignment="Center">
-				<StackPanel Spacing="20"
+				<StackPanel Spacing="16"
 							HorizontalAlignment="Center"
 							VerticalAlignment="Center"
-							Margin="50">
+							Margin="50"
+							MinWidth="320">
 					<Label HorizontalAlignment="Center"
-						Content="{Binding LabelTxt}"></Label>
+						   HorizontalContentAlignment="Center"
+						   FontSize="18"
+						   FontWeight="SemiBold"
+						   Content="{Binding StepTitle}" />
 					<ProgressBar
 						Height="15"
 						CornerRadius="10"
 						Foreground="#789395"
-						Value="{Binding Percent, FallbackValue=50}">
+						Minimum="0"
+						Maximum="100"
+						Value="{Binding Percent}">
 					</ProgressBar>
-					<Label HorizontalContentAlignment="Center"
-						   Content="{Binding ProgressTxt, FallbackValue=0kB/100kB}"
-					   >
-
-					</Label>
+					<Label HorizontalAlignment="Center"
+						   HorizontalContentAlignment="Center"
+						   FontSize="16"
+						   Content="{Binding PercentText}" />
+					<Label HorizontalAlignment="Center"
+						   HorizontalContentAlignment="Center"
+						   FontSize="14"
+						   Opacity="0.85"
+						   Content="{Binding DetailText}"
+						   IsVisible="{Binding HasDetailText}" />
 					<Label HorizontalContentAlignment="Center"
 						   HorizontalAlignment="Center"
 						   Margin="0,50,0,0"
