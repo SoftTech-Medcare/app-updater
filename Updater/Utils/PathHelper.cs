@@ -37,6 +37,80 @@ namespace Updater.Utils
             return string.IsNullOrEmpty(sanitized) ? fallback : sanitized;
         }
 
+        /// <summary>
+        /// Download archives left in the updater install directory (not installed app version markers).
+        /// </summary>
+        public static bool IsStaleUpdaterDownloadPackage(string? fileName)
+        {
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return false;
+            }
+
+            var name = Path.GetFileName(fileName);
+            if (name.Equals("unknown.gz", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("updater-update.tar.gz", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return name.StartsWith("updater-", StringComparison.OrdinalIgnoreCase)
+                && name.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Strips .tar.gz / .tgz / trailing .tar from a package file name.</summary>
+        public static string GetPackageBaseNameWithoutExtension(string fileName)
+        {
+            var name = Path.GetFileName(fileName);
+            if (name.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
+            {
+                name = name[..^7];
+            }
+            else if (name.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
+            {
+                name = name[..^4];
+            }
+            else
+            {
+                name = Path.GetFileNameWithoutExtension(name);
+            }
+
+            if (name.EndsWith(".tar", StringComparison.OrdinalIgnoreCase))
+            {
+                name = name[..^4];
+            }
+
+            return name;
+        }
+
+        /// <summary>Parses a version token from update file names (e.g. Box-2.0.13, update-2.0.13).</summary>
+        public static string? TryParseVersionFromPackageFileName(string? filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath))
+            {
+                return null;
+            }
+
+            var baseName = GetPackageBaseNameWithoutExtension(Path.GetFileName(filePath));
+            if (string.IsNullOrEmpty(baseName))
+            {
+                return null;
+            }
+
+            var splits = baseName.Split('-', StringSplitOptions.RemoveEmptyEntries);
+            if (splits.Length > 1)
+            {
+                var candidate = splits[^1];
+                if (System.Version.TryParse(candidate, out _))
+                {
+                    return candidate;
+                }
+            }
+
+            var match = VersionToken.Match(baseName);
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
         public static string SanitizeDownloadFileName(string? fileName, string fallback = "download.tar.gz")
         {
             if (string.IsNullOrWhiteSpace(fileName))

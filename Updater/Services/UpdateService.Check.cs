@@ -31,6 +31,7 @@ namespace Updater.Services
             }
 
             ResetCheckState();
+            CleanupStaleDownloadPackages();
 
             var server = Settings.Default.UpdateServer.TrimEnd('/');
             var appName = Settings.Default.AppName;

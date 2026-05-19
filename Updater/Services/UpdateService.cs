@@ -332,7 +332,8 @@ namespace Updater.Services
                 long lastDownloadProgressMs = 0;
                 await ExtractTar(unzipped, destinationPath, (c, t, p) =>
                 {
-                    onInstallProgress?.Invoke(c, t, p);
+                    ReportProgressOnUiThread(onInstallProgress, c, t, p);
+
                     var now = Environment.TickCount64;
                     if (compressedTotal <= 0 || now - lastDownloadProgressMs < ExtractProgressThrottleMs)
                     {
@@ -343,9 +344,17 @@ namespace Updater.Services
                     var extractPercent = (float)Math.Min(
                         100.0,
                         (double)progressStream.BytesRead / compressedTotal * 100);
-                    onExtractProgress?.Invoke(progressStream.BytesRead, compressedTotal, extractPercent);
+                    ReportProgressOnUiThread(
+                        onExtractProgress,
+                        progressStream.BytesRead,
+                        compressedTotal,
+                        extractPercent);
                 });
-                onExtractProgress?.Invoke(progressStream.BytesRead, compressedTotal, 100f);
+                ReportProgressOnUiThread(
+                    onExtractProgress,
+                    progressStream.BytesRead,
+                    compressedTotal,
+                    100f);
             }
 
             var extractedFiles = Directory.Exists(destinationPath)
@@ -1055,6 +1064,30 @@ namespace Updater.Services
             return skipped;
         }
 
+        private static void ReportProgressOnUiThread(OnProgress? onProgress, long current, long total, float percent)
+        {
+            if (onProgress == null)
+            {
+                return;
+            }
+
+            Dispatcher.UIThread.Post(() => onProgress(current, total, percent));
+        }
+
+        private static void ReportProgressOnUiThread(
+            OnInstallProgress? onProgress,
+            long current,
+            long total,
+            float percent)
+        {
+            if (onProgress == null)
+            {
+                return;
+            }
+
+            Dispatcher.UIThread.Post(() => onProgress(current, total, percent));
+        }
+
         private static void ReportExtractProgress(
             OnProgress? onProgress,
             ref long lastReportMs,
@@ -1074,7 +1107,7 @@ namespace Updater.Services
             }
 
             lastReportMs = now;
-            Dispatcher.UIThread.Post(() => onProgress(current, total, percent));
+            ReportProgressOnUiThread(onProgress, current, total, percent);
         }
 
         public static async Task ExtractTar(Stream stream, string outputDir, OnProgress? onProgress = null)
@@ -1290,37 +1323,80 @@ namespace Updater.Services
             return true;
         }
 
-        public static string? GetVersionFromFileName(string filePath)
-        {
-            var splits = Path.GetFileNameWithoutExtension(filePath).Split('-');
-            return splits.Length > 1 ? splits.Last().Replace(".tar", "") : null;
-        }
+        public static string? GetVersionFromFileName(string filePath) =>
+            PathHelper.TryParseVersionFromPackageFileName(filePath);
 
+        /// <summary>
+        /// Pending legacy app download package in the updater install folder (excludes updater self-update archives).
+        /// </summary>
         private static string? GetCurrentFile()
         {
-            var currentFile = Directory.GetFiles(AppDomain.CurrentDomain.BaseDirectory, "*.tar.gz")
-                .OrderByDescending(x => new FileInfo(x).LastWriteTimeUtc)
+            return Directory.GetFiles(AppDomain.CurrentDomain.BaseDirectory, "*.tar.gz")
+                .Where(path => !PathHelper.IsStaleUpdaterDownloadPackage(path))
+                .OrderByDescending(path => new FileInfo(path).LastWriteTimeUtc)
                 .FirstOrDefault();
-            return currentFile;
         }
 
         /// <summary>
-        /// Gets the current version information (version, modified date, checksum) from either
-        /// a .tar.gz file in the base directory or from settings.
+        /// Removes leftover updater self-update download archives from the install directory.
+        /// </summary>
+        public static void CleanupStaleDownloadPackages(string? exceptPackagePath = null)
+        {
+            var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            string? exceptFullPath = null;
+            if (!string.IsNullOrWhiteSpace(exceptPackagePath))
+            {
+                try
+                {
+                    exceptFullPath = Path.GetFullPath(exceptPackagePath);
+                }
+                catch (ArgumentException)
+                {
+                    exceptFullPath = exceptPackagePath;
+                }
+            }
+
+            foreach (var path in Directory.EnumerateFiles(baseDir, "*.tar.gz"))
+            {
+                if (exceptFullPath != null)
+                {
+                    try
+                    {
+                        if (string.Equals(Path.GetFullPath(path), exceptFullPath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+                    }
+                    catch (ArgumentException)
+                    {
+                        // ignore invalid paths
+                    }
+                }
+
+                if (!PathHelper.IsStaleUpdaterDownloadPackage(path))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    File.Delete(path);
+                    Logger.LogUpgradeOutput($"Removed stale download package: {Path.GetFileName(path)}");
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError($"Failed to remove stale download package: {Path.GetFileName(path)}", ex);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Installed app version for update checks — from persisted settings only, not download tarballs.
         /// </summary>
         private static (string? version, DateTimeOffset? modified, string? checksum) GetCurrentVersionInfo()
         {
-            var currentFile = GetCurrentFile();
             var lastVersion = Settings.Default.LastVersion;
-
-            if (!string.IsNullOrWhiteSpace(currentFile))
-            {
-                var fileInfo = new FileInfo(currentFile);
-                var version = GetVersionFromFileName(currentFile);
-                var checksum = GetMD5HashFromFile(currentFile);
-                return (version, fileInfo.LastWriteTimeUtc, checksum);
-            }
-            else if (lastVersion != null)
+            if (lastVersion != null && !string.IsNullOrWhiteSpace(lastVersion.Version))
             {
                 return (lastVersion.Version, lastVersion.Modified, null);
             }

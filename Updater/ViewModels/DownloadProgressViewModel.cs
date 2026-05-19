@@ -16,14 +16,39 @@ namespace Updater.ViewModels
     public class DownloadProgressViewModel : ViewModelBase
     {
         private float percent;
-        private string progressTxt;
-        private string labelTxt;
+        private float archiveExtractPercent;
+        private string stepTitle = "";
+        private string detailText = "";
         private bool isFailed;
         private bool downloaded;
 
-        public float Percent { get => percent; set => this.RaiseAndSetIfChanged(ref percent, value); }
-        public string ProgressTxt { get => progressTxt; set => this.RaiseAndSetIfChanged(ref progressTxt, value); }
-        public string LabelTxt { get => labelTxt; set => this.RaiseAndSetIfChanged(ref labelTxt, value); }
+        public float Percent
+        {
+            get => percent;
+            set
+            {
+                this.RaiseAndSetIfChanged(ref percent, value);
+                this.RaisePropertyChanged(nameof(PercentText));
+            }
+        }
+
+        public string PercentText => $"{Math.Round(Percent)}%";
+
+        /// <summary>Current pipeline step (static while that step runs).</summary>
+        public string StepTitle { get => stepTitle; set => this.RaiseAndSetIfChanged(ref stepTitle, value); }
+
+        /// <summary>Sub-label: current file, byte counts, etc.</summary>
+        public string DetailText
+        {
+            get => detailText;
+            set
+            {
+                this.RaiseAndSetIfChanged(ref detailText, value);
+                this.RaisePropertyChanged(nameof(HasDetailText));
+            }
+        }
+
+        public bool HasDetailText => !string.IsNullOrWhiteSpace(DetailText);
 
         public bool IsFailed { get => isFailed; set => this.RaiseAndSetIfChanged(ref isFailed, value); }
         public bool IsDownloaded { get => downloaded; set => this.RaiseAndSetIfChanged(ref downloaded, value); }
@@ -32,11 +57,14 @@ namespace Updater.ViewModels
 
         public void MarkUpgradeComplete()
         {
-            ProgressTxt = "";
-            Percent = 100f;
-            LabelTxt = UpdateService.SelfUpdateOnlyMode
-                ? "Updater update staged. Restarting updater..."
-                : "Update completed successfully.";
+            ApplyProgress(
+                UpdateService.SelfUpdateOnlyMode
+                    ? "Updater update staged"
+                    : "Update completed",
+                UpdateService.SelfUpdateOnlyMode
+                    ? "Restarting updater..."
+                    : null,
+                100f);
         }
 
         public void MarkPipelineFailed(string stage, string? detail = null)
@@ -48,8 +76,9 @@ namespace Updater.ViewModels
             void Apply()
             {
                 IsFailed = true;
-                LabelTxt = message;
-                ProgressTxt = "";
+                StepTitle = message;
+                DetailText = "";
+                Percent = 0f;
             }
 
             if (Dispatcher.UIThread.CheckAccess())
@@ -71,6 +100,8 @@ namespace Updater.ViewModels
         {
             IsFailed = false;
             IsDownloaded = false;
+            archiveExtractPercent = 0f;
+            ApplyProgress(DownloadStepTitle, null, 0f);
             return Observable.StartAsync(async () =>
             {
                 try
@@ -168,6 +199,9 @@ namespace Updater.ViewModels
             {
                 try
                 {
+                    archiveExtractPercent = 0f;
+                    ApplyProgress(ExtractStepTitle, null, 0f);
+
                     Logger.LogUpgradeEvent(new UpgradeLog
                     {
                         Timestamp = DateTimeOffset.Now,
@@ -242,6 +276,8 @@ namespace Updater.ViewModels
             {
                 try
                 {
+                    ApplyProgress(FinishingStepTitle, "Removing temporary files", 100f);
+
                     Logger.LogUpgradeEvent(new UpgradeLog
                     {
                         Timestamp = DateTimeOffset.Now,
@@ -288,6 +324,7 @@ namespace Updater.ViewModels
                     }
 
                     File.Delete(sourcePath);
+                    UpdateService.CleanupStaleDownloadPackages();
 
                     Logger.LogUpgradeEvent(new UpgradeLog
                     {
@@ -320,45 +357,74 @@ namespace Updater.ViewModels
             });
         }
 
+        private string DownloadStepTitle =>
+            UpdateService.SelfUpdateOnlyMode ? "Downloading app updater" : "Downloading update";
+
+        private string ExtractStepTitle =>
+            UpdateService.SelfUpdateOnlyMode ? "Extracting app updater" : "Extracting update";
+
+        private static string FinishingStepTitle => "Finishing update";
+
+        private void ApplyProgress(string step, string? detail, float percent)
+        {
+            void Apply()
+            {
+                StepTitle = step;
+                DetailText = detail ?? "";
+                Percent = Math.Clamp(percent, 0f, 100f);
+            }
+
+            if (Dispatcher.UIThread.CheckAccess())
+            {
+                Apply();
+            }
+            else
+            {
+                Dispatcher.UIThread.Post(Apply);
+            }
+        }
+
         private void OnDownloadProgress(long downloaded, long totalSize, float percent)
         {
-            var current = Helper.SizeSuffix(downloaded);
-            var total = Helper.SizeSuffix(totalSize);
-            ProgressTxt = $"{current}/{total}";
-            LabelTxt = UpdateService.SelfUpdateOnlyMode
-                ? $"Downloading App Updater... {percent / 100:P2}"
-                : $"Downloading Update... {percent / 100:P2}";
-            Percent = percent;
+            var detail = totalSize > 0
+                ? $"{Helper.SizeSuffix(downloaded)} / {Helper.SizeSuffix(totalSize)}"
+                : Helper.SizeSuffix(downloaded);
+            ApplyProgress(DownloadStepTitle, detail, percent);
         }
 
         private void OnExtractProgress(long progress, long totalSize, float percent)
         {
-            var current = Helper.SizeSuffix(progress);
-            var total = Helper.SizeSuffix(totalSize);
-            ProgressTxt = $"{current}/{total}";
-            LabelTxt = $"Extracting... {percent / 100:P2}";
-            Percent = percent;
+            archiveExtractPercent = percent;
+            var detail = BuildExtractDetail(progress, totalSize);
+            ApplyProgress(ExtractStepTitle, detail, percent);
         }
 
         private void OnInstallProgress(long progress, long totalSize, float percent)
         {
+            var detail = BuildExtractDetail(progress, totalSize);
+            var barPercent = archiveExtractPercent > 0f ? archiveExtractPercent : percent;
+            ApplyProgress(ExtractStepTitle, detail, barPercent);
+        }
+
+        private static string? BuildExtractDetail(long progress, long totalSize)
+        {
             var entry = UpdateService.CurrentExtractEntry;
             if (!string.IsNullOrEmpty(entry) && totalSize > 0)
             {
-                ProgressTxt = $"{Helper.SizeSuffix(progress)}/{Helper.SizeSuffix(totalSize)}";
-                LabelTxt = UpdateService.SelfUpdateOnlyMode
-                    ? $"Installing {entry}... {percent / 100:P2}"
-                    : $"Installing {entry}... {percent / 100:P2}";
-            }
-            else
-            {
-                ProgressTxt = "";
-                LabelTxt = UpdateService.SelfUpdateOnlyMode
-                    ? $"Installing App Updater... {percent / 100:P2}"
-                    : $"Installing Update... {percent / 100:P2}";
+                return $"{entry} ({Helper.SizeSuffix(progress)} / {Helper.SizeSuffix(totalSize)})";
             }
 
-            Percent = percent;
+            if (!string.IsNullOrEmpty(entry))
+            {
+                return entry;
+            }
+
+            if (totalSize > 0)
+            {
+                return $"{Helper.SizeSuffix(progress)} / {Helper.SizeSuffix(totalSize)}";
+            }
+
+            return null;
         }
     }
 }
