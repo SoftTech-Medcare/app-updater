@@ -152,6 +152,11 @@ namespace Updater.ViewModels
                         Directory.CreateDirectory(destination);
                     }
 
+                    PathHelper.ValidateWritablePath(sourcePath, nameof(sourcePath));
+                    PathHelper.ValidateWritablePath(destination, nameof(destination));
+                    Logger.LogUpgradeOutput($"Extract source: {sourcePath}");
+                    Logger.LogUpgradeOutput($"Extract destination: {destination}");
+
                     var update = new UpdateService();
                     var extracted = await update.ExtractTarballFile(sourcePath, destination, OnExtractProgress, OnInstallProgress);
 

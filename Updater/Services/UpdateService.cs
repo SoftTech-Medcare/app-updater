@@ -150,7 +150,7 @@ namespace Updater.Services
             var fileName = disposition?.FileNameStar ?? disposition?.FileName;
             if (!string.IsNullOrWhiteSpace(fileName))
             {
-                return Path.GetFileName(fileName.Trim().Trim('"'));
+                return PathHelper.SanitizeDownloadFileName(fileName);
             }
 
             if (UseManifestSystem)
@@ -167,7 +167,7 @@ namespace Updater.Services
 
                 if (!string.IsNullOrWhiteSpace(SelfUpdateTargetVersion))
                 {
-                    return $"updater-{SelfUpdateTargetVersion}.tar.gz";
+                    return $"updater-{PathHelper.SanitizePathSegment(SelfUpdateTargetVersion)}.tar.gz";
                 }
 
                 return "updater-update.tar.gz";
@@ -301,8 +301,11 @@ namespace Updater.Services
             string? fromVersion = null;
             string? toVersion = null;
             
+            PathHelper.ValidateWritablePath(filePath, nameof(filePath));
+            PathHelper.ValidateWritablePath(destinationPath, nameof(destinationPath));
+
             Directory.CreateDirectory(destinationPath);
-            var extractedFile = Path.Combine(destinationPath, Path.GetFileNameWithoutExtension(filePath));
+            var extractedFile = PathHelper.GetTarArchiveIntermediatePath(destinationPath, filePath);
 
             Logger.LogUpgradeEvent(new UpgradeLog
             {
@@ -890,6 +893,37 @@ namespace Updater.Services
             }
         }
         
+        private static async Task SkipTarEntryContentAsync(
+            Stream stream,
+            byte[] buffer,
+            long fileSize,
+            ref long bytesRead)
+        {
+            long remaining = fileSize;
+            while (remaining > 0)
+            {
+                int toRead = (int)Math.Min(remaining, buffer.Length);
+                int read = await stream.ReadAsync(buffer, 0, toRead);
+                bytesRead += read;
+                if (read == 0) break;
+                remaining -= read;
+            }
+
+            long skipPadding = (512 - (fileSize % 512)) % 512;
+            if (skipPadding > 0)
+            {
+                remaining = skipPadding;
+                while (remaining > 0)
+                {
+                    int toRead = (int)Math.Min(remaining, buffer.Length);
+                    int read = await stream.ReadAsync(buffer, 0, toRead);
+                    bytesRead += read;
+                    if (read == 0) break;
+                    remaining -= read;
+                }
+            }
+        }
+
         public static async Task ExtractTar(Stream stream, string outputDir, OnProgress? onProgress = null)
         {
             var buffer = new byte[512];
@@ -952,8 +986,15 @@ namespace Updater.Services
                 if (!long.TryParse(sizeStr, System.Globalization.NumberStyles.Integer, null, out long fileSize))
                     fileSize = 0;
 
-                // Sanitize filename to prevent path traversal attacks
-                fileName = fileName.Replace('\\', '/').TrimStart('/');
+                // Sanitize filename to prevent path traversal and illegal characters
+                fileName = PathHelper.SanitizeTarEntryRelativePath(fileName);
+                if (string.IsNullOrWhiteSpace(fileName))
+                {
+                    Logger.LogError("Skipping tar entry with invalid path after sanitization");
+                    await SkipTarEntryContentAsync(stream, buffer, fileSize, ref bytesRead);
+                    continue;
+                }
+
                 var filePath = Path.Combine(outputDir, fileName);
                 
                 // Validate that the resolved path is still within outputDir
@@ -963,30 +1004,7 @@ namespace Updater.Services
                     fullFilePath != fullOutputDir)
                 {
                     Logger.LogError($"Skipping file with suspicious path: {fileName}");
-                    // Skip this file and read past it
-                    long remaining = fileSize;
-                    while (remaining > 0)
-                    {
-                        int toRead = (int)Math.Min(remaining, buffer.Length);
-                        int read = await stream.ReadAsync(buffer, 0, toRead);
-                        bytesRead += read;
-                        if (read == 0) break;
-                        remaining -= read;
-                    }
-                    // Skip padding to next 512-byte boundary
-                    long skipPadding = (512 - (fileSize % 512)) % 512;
-                    if (skipPadding > 0)
-                    {
-                        remaining = skipPadding;
-                        while (remaining > 0)
-                        {
-                            int toRead = (int)Math.Min(remaining, buffer.Length);
-                            int read = await stream.ReadAsync(buffer, 0, toRead);
-                            bytesRead += read;
-                            if (read == 0) break;
-                            remaining -= read;
-                        }
-                    }
+                    await SkipTarEntryContentAsync(stream, buffer, fileSize, ref bytesRead);
                     continue;
                 }
 

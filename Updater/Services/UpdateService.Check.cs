@@ -267,8 +267,10 @@ namespace Updater.Services
             if (info.SelfUpdate?.Available == true)
             {
                 SelfUpdateAdvertised = true;
-                SelfUpdateTargetVersion = info.SelfUpdate.TargetVersion;
-                SelfUpdateTargetFileName = info.SelfUpdate.PackageFile;
+                SelfUpdateTargetVersion = PathHelper.SanitizePathSegment(info.SelfUpdate.TargetVersion);
+                SelfUpdateTargetFileName = string.IsNullOrWhiteSpace(info.SelfUpdate.PackageFile)
+                    ? null
+                    : PathHelper.SanitizeDownloadFileName(info.SelfUpdate.PackageFile);
                 return;
             }
 
@@ -276,7 +278,8 @@ namespace Updater.Services
             if (selfUpgrade != null)
             {
                 SelfUpdateAdvertised = true;
-                SelfUpdateTargetVersion = ParseSelfUpdateVersionFromId(selfUpgrade.Id) ?? selfUpgrade.Name;
+                SelfUpdateTargetVersion = PathHelper.SanitizePathSegment(
+                    ParseSelfUpdateVersionFromId(selfUpgrade.Id) ?? info.TargetVersion);
                 SelfUpdateTargetFileName = null;
                 return;
             }
@@ -345,8 +348,10 @@ namespace Updater.Services
                 }
 
                 SelfUpdateAdvertised = true;
-                SelfUpdateTargetVersion = chosen.Version.Trim();
-                SelfUpdateTargetFileName = chosen.File;
+                SelfUpdateTargetVersion = PathHelper.SanitizePathSegment(chosen.Version.Trim());
+                SelfUpdateTargetFileName = string.IsNullOrWhiteSpace(chosen.File)
+                    ? null
+                    : PathHelper.SanitizeDownloadFileName(chosen.File);
             }
             catch (Exception ex)
             {
@@ -358,9 +363,8 @@ namespace Updater.Services
         /// <summary>Staging folder for a pending updater self-update (under the running updater install root).</summary>
         public static string GetSelfUpdatePendingDirectory(string? version = null)
         {
-            var resolved = version
-                ?? SelfUpdateTargetVersion
-                ?? GetUpdaterVersion();
+            var resolved = PathHelper.SanitizePathSegment(
+                version ?? SelfUpdateTargetVersion ?? GetUpdaterVersion());
             return Path.Combine(
                 GetUpdaterInstallDirectory(),
                 "pending-update",
