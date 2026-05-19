@@ -305,65 +305,55 @@ namespace Updater.Services
             PathHelper.ValidateWritablePath(destinationPath, nameof(destinationPath));
 
             Directory.CreateDirectory(destinationPath);
-            var extractedFile = PathHelper.GetTarArchiveIntermediatePath(destinationPath, filePath);
 
             Logger.LogUpgradeEvent(new UpgradeLog
             {
                 Timestamp = DateTimeOffset.Now,
                 Status = UpgradeStatus.InProgress,
                 Stage = UpgradeStage.Extract,
-                Message = "Decompressing archive"
+                Message = "Extracting archive"
             });
 
+            // Stream gzip -> tar directly (same as manifest self-update path). Avoids writing an
+            // intermediate .tar inside destinationPath, which could collide with tar entries and
+            // leave only the first file extracted (e.g. updater.deps.json only).
             using (FileStream source = File.OpenRead(filePath))
             using (ProgressStream progressStream = new ProgressStream(source))
             using (GZipStream unzipped = new GZipStream(progressStream, CompressionMode.Decompress))
-            using (FileStream fs = File.Create(extractedFile))
             {
-                var total = source.Length;
-                var buffer = new byte[1024];
-                int read = 0;
-                Stopwatch timer = new Stopwatch();
-                timer.Start();
-                do
+                var compressedTotal = source.Length;
+                var extractTimer = Stopwatch.StartNew();
+                await ExtractTar(unzipped, destinationPath, (c, t, p) =>
                 {
-                    read = await unzipped.ReadAsync(buffer, 0, 1024);
-                    fs.Write(buffer, 0, read);
-
-                    var percent = (double)progressStream.BytesRead / total * 100;
-                    if (timer.ElapsedMilliseconds > 16.65 || percent == 100)
+                    var percent = compressedTotal > 0
+                        ? (float)((double)progressStream.BytesRead / compressedTotal * 100)
+                        : p;
+                    if (extractTimer.ElapsedMilliseconds > 16.65 || percent >= 100f)
                     {
                         Dispatcher.UIThread.Post(() =>
                         {
-                            onExtractProgress?.Invoke(progressStream.BytesRead, total, (float)percent);
+                            onExtractProgress?.Invoke(progressStream.BytesRead, compressedTotal, percent);
+                            onInstallProgress?.Invoke(c, t, percent);
                         });
-                        timer.Restart();
+                        extractTimer.Restart();
                     }
-                } while (read > 0);
-                timer.Stop();
+                });
                 Dispatcher.UIThread.Post(() =>
                 {
-                    onExtractProgress?.Invoke(progressStream.BytesRead, total, (float)100f);
+                    onExtractProgress?.Invoke(progressStream.BytesRead, compressedTotal, 100f);
                 });
             }
 
-            Logger.LogUpgradeOutput("Decompression completed");
-            Logger.LogUpgradeEvent(new UpgradeLog
+            var extractedFiles = Directory.Exists(destinationPath)
+                ? Directory.GetFiles(destinationPath, "*", SearchOption.AllDirectories)
+                : Array.Empty<string>();
+            Logger.LogUpgradeOutput(
+                $"Tar extraction completed: {extractedFiles.Length} file(s) in {destinationPath}");
+            if (extractedFiles.Length > 0)
             {
-                Timestamp = DateTimeOffset.Now,
-                Status = UpgradeStatus.InProgress,
-                Stage = UpgradeStage.Extract,
-                Message = "Decompression completed, extracting tar archive"
-            });
-
-            await Task.Delay(100);
-            // Installing (.tar expanding)
-            using (FileStream fs = File.OpenRead(extractedFile))
-            {
-                await ExtractTar(fs, destinationPath, (c, t, p) => onInstallProgress?.Invoke(c, t, p));
+                Logger.LogUpgradeOutput(
+                    "Extracted sample: " + string.Join(", ", extractedFiles.Take(8).Select(Path.GetFileName)));
             }
-            
-            Logger.LogUpgradeOutput("Tar extraction completed");
             
             var packageManifestPath = Path.Combine(destinationPath, "package-manifest.json");
             if (SelfUpdateOnlyMode)
@@ -376,6 +366,7 @@ namespace Updater.Services
                 else
                 {
                     Logger.LogUpgradeOutput("Self-update: Updater tarball extracted to pending-update");
+                    ValidateUpdaterPayload(destinationPath);
                 }
             }
             else if (File.Exists(packageManifestPath))
@@ -406,7 +397,31 @@ namespace Updater.Services
             }
 
             Logger.LogUpgradeOutput("=== ExtractTarballFile completed ===");
-            return extractedFile;
+            return string.Empty;
+        }
+
+        private static void ValidateUpdaterPayload(string directory)
+        {
+            if (File.Exists(Path.Combine(directory, "Updater.dll")))
+            {
+                return;
+            }
+
+            var nested = Directory.GetDirectories(directory)
+                .FirstOrDefault(d => File.Exists(Path.Combine(d, "Updater.dll")));
+            if (nested != null)
+            {
+                throw new InvalidOperationException(
+                    $"Updater payload is nested in {Path.GetFileName(nested)}/; expected flat layout in {directory}");
+            }
+
+            var found = Directory.Exists(directory)
+                ? string.Join(", ", Directory.GetFiles(directory, "*", SearchOption.AllDirectories)
+                    .Take(20)
+                    .Select(Path.GetFileName))
+                : "(directory missing)";
+            throw new FileNotFoundException(
+                $"Updater self-update incomplete: Updater.dll not found in {directory}. Found: {found}");
         }
 
         /// <summary>
@@ -508,6 +523,8 @@ namespace Updater.Services
                 using var gzip = new GZipStream(fs, CompressionMode.Decompress);
                 await ExtractTar(gzip, pendingDir);
             }
+
+            ValidateUpdaterPayload(pendingDir);
         }
 
         private static async Task ApplyAppUpdateFromDirectoryAsync(string upgradePath, string destinationPath)

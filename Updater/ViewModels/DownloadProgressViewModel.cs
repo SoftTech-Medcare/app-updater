@@ -240,7 +240,10 @@ namespace Updater.ViewModels
                         Message = "Cleaning up temporary files"
                     });
                     
-                    File.Delete(extracted);
+                    if (!string.IsNullOrEmpty(extracted) && File.Exists(extracted))
+                    {
+                        File.Delete(extracted);
+                    }
                     var info = new FileInfo(sourcePath);
                     string? version = null;
                     if (UpdateService.SelfUpdateOnlyMode)
