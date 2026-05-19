@@ -1,9 +1,13 @@
 ﻿using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Threading;
 using ReactiveUI;
 using System;
 using System.Reactive;
 using Updater.Properties;
+using Updater.Services;
+using Updater.Utils;
 using Updater.Views;
 
 namespace Updater.ViewModels
@@ -32,28 +36,57 @@ namespace Updater.ViewModels
                 ? "Application is already on the latest version."
                 : "";
 
-            Confirm = ReactiveCommand.Create(() =>
+            Confirm = ReactiveCommand.CreateFromTask(async () =>
             {
-                // 2nd output : Use this output code to detect it in the target app, eg. to automatically close the running instance
-                Console.Out.WriteLine("!!Update!!");
-
-                var desktop = (Application.Current!.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)!;
-                var current = desktop.MainWindow;
-
-                desktop.MainWindow = new DownloadProgressWindow();
-                desktop.MainWindow.DataContext = new DownloadProgressViewModel();
-                desktop.MainWindow.Topmost = true;
-                desktop.MainWindow.Show();
-
-                if (Settings.Default.ProgressFullscreen)
-                {
-                    desktop.MainWindow.WindowState = Avalonia.Controls.WindowState.FullScreen;
-                }
-
-                current.Close();
+                await Dispatcher.UIThread.InvokeAsync(StartDownloadFlowOnUiThread);
             });
 
             Cancel = ReactiveCommand.Create(() => { });
+        }
+
+        private void StartDownloadFlowOnUiThread()
+        {
+            if (Application.Current?.ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
+            {
+                return;
+            }
+
+            try
+            {
+                desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
+                var previous = desktop.MainWindow;
+                var progressVm = new DownloadProgressViewModel();
+                var progressWindow = new DownloadProgressWindow(progressVm)
+                {
+                    Topmost = true,
+                    WindowStartupLocation = previous?.WindowStartupLocation ?? WindowStartupLocation.CenterScreen
+                };
+
+                desktop.MainWindow = progressWindow;
+                progressWindow.Show();
+                progressWindow.Activate();
+
+                if (Settings.Default.ProgressFullscreen)
+                {
+                    progressWindow.WindowState = WindowState.FullScreen;
+                }
+
+                // Signal HemoBox before hiding the prompt (closing it can exit the app on Linux).
+                Console.Out.WriteLine("!!Update!!");
+                Console.Out.Flush();
+
+                if (previous is Window oldWindow && !ReferenceEquals(oldWindow, progressWindow))
+                {
+                    oldWindow.Hide();
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError("Failed to open download window", ex);
+                Console.WriteLine($"Update flow error: {ex.Message}");
+                throw;
+            }
         }
 
         public string CurrentVersion => currentVersion;

@@ -925,6 +925,53 @@ namespace Updater.Services
             }
         }
         
+        /// <summary>
+        /// Reads exactly one 512-byte tar header. Returns false on clean EOF before any byte.
+        /// GZip/file streams may return partial reads; we must loop until 512 or EOF.
+        /// </summary>
+        private static async Task<bool> TryReadTarHeaderAsync(Stream stream, byte[] headerBuffer)
+        {
+            int offset = 0;
+            while (offset < TarHeaderBufferSize)
+            {
+                int read = await stream.ReadAsync(headerBuffer, offset, TarHeaderBufferSize - offset);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                offset += read;
+            }
+
+            if (offset == 0)
+            {
+                return false;
+            }
+
+            if (offset < TarHeaderBufferSize)
+            {
+                var partialAllZero = true;
+                for (var i = 0; i < offset; i++)
+                {
+                    if (headerBuffer[i] != 0)
+                    {
+                        partialAllZero = false;
+                        break;
+                    }
+                }
+
+                if (!partialAllZero)
+                {
+                    throw new IOException(
+                        $"Truncated tar header at end of archive ({offset}/{TarHeaderBufferSize} bytes)");
+                }
+
+                Array.Clear(headerBuffer, offset, TarHeaderBufferSize - offset);
+            }
+
+            return true;
+        }
+
         private static string GetTarEntryPath(ReadOnlySpan<byte> header)
         {
             var namePart = Encoding.ASCII.GetString(header.Slice(0, 100)).TrimEnd('\0');
@@ -1045,15 +1092,9 @@ namespace Updater.Services
             {
                 while (true)
                 {
-                    int headerBytesRead = await stream.ReadAsync(headerBuffer, 0, TarHeaderBufferSize);
-                    if (headerBytesRead == 0)
+                    if (!await TryReadTarHeaderAsync(stream, headerBuffer))
                     {
                         break;
-                    }
-
-                    if (headerBytesRead < TarHeaderBufferSize)
-                    {
-                        throw new IOException($"Truncated tar header ({headerBytesRead} bytes)");
                     }
 
                     if (headerBuffer.All(b => b == 0))
