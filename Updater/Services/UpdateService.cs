@@ -295,7 +295,7 @@ namespace Updater.Services
             }
         }
 
-        public async Task<string> ExtractTarballFile(string filePath, string destinationPath, OnProgress onExtractProgress, OnInstallProgress onInstallProgress)
+        public async Task ExtractTarballFile(string filePath, string destinationPath, OnProgress onExtractProgress, OnInstallProgress onInstallProgress)
         {
             Logger.LogUpgradeOutput($"=== Starting ExtractTarballFile ===");
             Logger.LogUpgradeOutput($"Source file: {filePath}");
@@ -401,7 +401,6 @@ namespace Updater.Services
             }
 
             Logger.LogUpgradeOutput("=== ExtractTarballFile completed ===");
-            return string.Empty;
         }
 
         private static void ValidateUpdaterPayload(string directory)
