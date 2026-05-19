@@ -288,6 +288,7 @@ namespace Updater.ViewModels
                     }
 
                     File.Delete(sourcePath);
+                    UpdateService.CleanupStaleDownloadPackages();
 
                     Logger.LogUpgradeEvent(new UpgradeLog
                     {

@@ -1290,37 +1290,80 @@ namespace Updater.Services
             return true;
         }
 
-        public static string? GetVersionFromFileName(string filePath)
-        {
-            var splits = Path.GetFileNameWithoutExtension(filePath).Split('-');
-            return splits.Length > 1 ? splits.Last().Replace(".tar", "") : null;
-        }
+        public static string? GetVersionFromFileName(string filePath) =>
+            PathHelper.TryParseVersionFromPackageFileName(filePath);
 
+        /// <summary>
+        /// Pending legacy app download package in the updater install folder (excludes updater self-update archives).
+        /// </summary>
         private static string? GetCurrentFile()
         {
-            var currentFile = Directory.GetFiles(AppDomain.CurrentDomain.BaseDirectory, "*.tar.gz")
-                .OrderByDescending(x => new FileInfo(x).LastWriteTimeUtc)
+            return Directory.GetFiles(AppDomain.CurrentDomain.BaseDirectory, "*.tar.gz")
+                .Where(path => !PathHelper.IsStaleUpdaterDownloadPackage(path))
+                .OrderByDescending(path => new FileInfo(path).LastWriteTimeUtc)
                 .FirstOrDefault();
-            return currentFile;
         }
 
         /// <summary>
-        /// Gets the current version information (version, modified date, checksum) from either
-        /// a .tar.gz file in the base directory or from settings.
+        /// Removes leftover updater self-update download archives from the install directory.
+        /// </summary>
+        public static void CleanupStaleDownloadPackages(string? exceptPackagePath = null)
+        {
+            var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            string? exceptFullPath = null;
+            if (!string.IsNullOrWhiteSpace(exceptPackagePath))
+            {
+                try
+                {
+                    exceptFullPath = Path.GetFullPath(exceptPackagePath);
+                }
+                catch (ArgumentException)
+                {
+                    exceptFullPath = exceptPackagePath;
+                }
+            }
+
+            foreach (var path in Directory.EnumerateFiles(baseDir, "*.tar.gz"))
+            {
+                if (exceptFullPath != null)
+                {
+                    try
+                    {
+                        if (string.Equals(Path.GetFullPath(path), exceptFullPath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+                    }
+                    catch (ArgumentException)
+                    {
+                        // ignore invalid paths
+                    }
+                }
+
+                if (!PathHelper.IsStaleUpdaterDownloadPackage(path))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    File.Delete(path);
+                    Logger.LogUpgradeOutput($"Removed stale download package: {Path.GetFileName(path)}");
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError($"Failed to remove stale download package: {Path.GetFileName(path)}", ex);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Installed app version for update checks — from persisted settings only, not download tarballs.
         /// </summary>
         private static (string? version, DateTimeOffset? modified, string? checksum) GetCurrentVersionInfo()
         {
-            var currentFile = GetCurrentFile();
             var lastVersion = Settings.Default.LastVersion;
-
-            if (!string.IsNullOrWhiteSpace(currentFile))
-            {
-                var fileInfo = new FileInfo(currentFile);
-                var version = GetVersionFromFileName(currentFile);
-                var checksum = GetMD5HashFromFile(currentFile);
-                return (version, fileInfo.LastWriteTimeUtc, checksum);
-            }
-            else if (lastVersion != null)
+            if (lastVersion != null && !string.IsNullOrWhiteSpace(lastVersion.Version))
             {
                 return (lastVersion.Version, lastVersion.Modified, null);
             }
