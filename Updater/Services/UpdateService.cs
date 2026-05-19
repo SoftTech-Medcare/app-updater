@@ -24,6 +24,13 @@ namespace Updater.Services
         public static bool UseManifestSystem = false;
         public static UpgradeInfoWrapper? CurrentUpgradeInfo = null;
 
+        /// <summary>Tar entry currently being written (for progress UI).</summary>
+        public static string? CurrentExtractEntry { get; private set; }
+
+        private const int TarHeaderBufferSize = 512;
+        private const int TarContentBufferSize = 64 * 1024;
+        private const int ExtractProgressThrottleMs = 200;
+
         /// <summary>True when the update server has a newer Updater package than this running build.</summary>
         public static bool SelfUpdateAdvertised = false;
 
@@ -322,26 +329,23 @@ namespace Updater.Services
             using (GZipStream unzipped = new GZipStream(progressStream, CompressionMode.Decompress))
             {
                 var compressedTotal = source.Length;
-                var extractTimer = Stopwatch.StartNew();
+                long lastDownloadProgressMs = 0;
                 await ExtractTar(unzipped, destinationPath, (c, t, p) =>
                 {
-                    var percent = compressedTotal > 0
-                        ? (float)((double)progressStream.BytesRead / compressedTotal * 100)
-                        : p;
-                    if (extractTimer.ElapsedMilliseconds > 16.65 || percent >= 100f)
+                    onInstallProgress?.Invoke(c, t, p);
+                    var now = Environment.TickCount64;
+                    if (compressedTotal <= 0 || now - lastDownloadProgressMs < ExtractProgressThrottleMs)
                     {
-                        Dispatcher.UIThread.Post(() =>
-                        {
-                            onExtractProgress?.Invoke(progressStream.BytesRead, compressedTotal, percent);
-                            onInstallProgress?.Invoke(c, t, percent);
-                        });
-                        extractTimer.Restart();
+                        return;
                     }
+
+                    lastDownloadProgressMs = now;
+                    var extractPercent = (float)Math.Min(
+                        100.0,
+                        (double)progressStream.BytesRead / compressedTotal * 100);
+                    onExtractProgress?.Invoke(progressStream.BytesRead, compressedTotal, extractPercent);
                 });
-                Dispatcher.UIThread.Post(() =>
-                {
-                    onExtractProgress?.Invoke(progressStream.BytesRead, compressedTotal, 100f);
-                });
+                onExtractProgress?.Invoke(progressStream.BytesRead, compressedTotal, 100f);
             }
 
             var extractedFiles = Directory.Exists(destinationPath)
@@ -402,26 +406,38 @@ namespace Updater.Services
 
         private static void ValidateUpdaterPayload(string directory)
         {
-            if (File.Exists(Path.Combine(directory, "Updater.dll")))
+            var payloadDir = directory;
+            if (!File.Exists(Path.Combine(directory, "Updater.dll")))
             {
-                return;
+                var nested = Directory.GetDirectories(directory)
+                    .FirstOrDefault(d => File.Exists(Path.Combine(d, "Updater.dll")));
+                if (nested != null)
+                {
+                    throw new InvalidOperationException(
+                        $"Updater payload is nested in {Path.GetFileName(nested)}/; expected flat layout in {directory}");
+                }
+
+                var found = Directory.Exists(directory)
+                    ? string.Join(", ", Directory.GetFiles(directory, "*", SearchOption.AllDirectories)
+                        .Take(20)
+                        .Select(Path.GetFileName))
+                    : "(directory missing)";
+                throw new FileNotFoundException(
+                    $"Updater self-update incomplete: Updater.dll not found in {directory}. Found: {found}");
             }
 
-            var nested = Directory.GetDirectories(directory)
-                .FirstOrDefault(d => File.Exists(Path.Combine(d, "Updater.dll")));
-            if (nested != null)
+            if (!File.Exists(Path.Combine(payloadDir, "Updater.runtimeconfig.json")))
+            {
+                throw new FileNotFoundException(
+                    $"Updater self-update incomplete: Updater.runtimeconfig.json missing in {directory}");
+            }
+
+            var fileCount = Directory.GetFiles(payloadDir, "*", SearchOption.AllDirectories).Length;
+            if (fileCount < 5)
             {
                 throw new InvalidOperationException(
-                    $"Updater payload is nested in {Path.GetFileName(nested)}/; expected flat layout in {directory}");
+                    $"Updater self-update incomplete: expected a full publish output but only {fileCount} file(s) in {directory}");
             }
-
-            var found = Directory.Exists(directory)
-                ? string.Join(", ", Directory.GetFiles(directory, "*", SearchOption.AllDirectories)
-                    .Take(20)
-                    .Select(Path.GetFileName))
-                : "(directory missing)";
-            throw new FileNotFoundException(
-                $"Updater self-update incomplete: Updater.dll not found in {directory}. Found: {found}");
         }
 
         /// <summary>
@@ -910,6 +926,68 @@ namespace Updater.Services
             }
         }
         
+        private static string GetTarEntryPath(ReadOnlySpan<byte> header)
+        {
+            var namePart = Encoding.ASCII.GetString(header.Slice(0, 100)).TrimEnd('\0');
+            var prefixPart = Encoding.ASCII.GetString(header.Slice(345, 155)).TrimEnd('\0');
+            if (string.IsNullOrEmpty(prefixPart))
+            {
+                return namePart;
+            }
+
+            if (string.IsNullOrEmpty(namePart))
+            {
+                return prefixPart;
+            }
+
+            return $"{prefixPart.TrimEnd('/')}/{namePart}";
+        }
+
+        private static char GetTarTypeFlag(ReadOnlySpan<byte> header) => (char)header[156];
+
+        private static async Task SkipTarEntryPaddingAsync(Stream stream, byte[] buffer, long fileSize)
+        {
+            long padding = (512 - (fileSize % 512)) % 512;
+            if (padding <= 0)
+            {
+                return;
+            }
+
+            long remaining = padding;
+            while (remaining > 0)
+            {
+                int toRead = (int)Math.Min(remaining, buffer.Length);
+                int read = await stream.ReadAsync(buffer, 0, toRead);
+                if (read == 0)
+                {
+                    throw new IOException("Unexpected end of archive while skipping tar padding");
+                }
+
+                remaining -= read;
+            }
+        }
+
+        private static async Task<string> ReadTarEntryStringAsync(Stream stream, byte[] buffer, long length)
+        {
+            using var ms = new MemoryStream();
+            long remaining = length;
+            while (remaining > 0)
+            {
+                int toRead = (int)Math.Min(remaining, buffer.Length);
+                int read = await stream.ReadAsync(buffer, 0, toRead);
+                if (read == 0)
+                {
+                    throw new IOException("Unexpected end of archive while reading tar meta entry");
+                }
+
+                await ms.WriteAsync(buffer, 0, read);
+                remaining -= read;
+            }
+
+            await SkipTarEntryPaddingAsync(stream, buffer, length);
+            return Encoding.UTF8.GetString(ms.ToArray()).TrimEnd('\0');
+        }
+
         private static async Task<long> SkipTarEntryContentAsync(Stream stream, byte[] buffer, long fileSize)
         {
             long skipped = 0;
@@ -919,223 +997,232 @@ namespace Updater.Services
                 int toRead = (int)Math.Min(remaining, buffer.Length);
                 int read = await stream.ReadAsync(buffer, 0, toRead);
                 skipped += read;
-                if (read == 0) break;
+                if (read == 0)
+                {
+                    throw new IOException("Unexpected end of archive while skipping tar entry");
+                }
+
                 remaining -= read;
             }
 
-            long skipPadding = (512 - (fileSize % 512)) % 512;
-            if (skipPadding > 0)
+            await SkipTarEntryPaddingAsync(stream, buffer, fileSize);
+            return skipped;
+        }
+
+        private static void ReportExtractProgress(
+            OnProgress? onProgress,
+            ref long lastReportMs,
+            long current,
+            long total,
+            float percent)
+        {
+            if (onProgress == null || total <= 0)
             {
-                remaining = skipPadding;
-                while (remaining > 0)
-                {
-                    int toRead = (int)Math.Min(remaining, buffer.Length);
-                    int read = await stream.ReadAsync(buffer, 0, toRead);
-                    skipped += read;
-                    if (read == 0) break;
-                    remaining -= read;
-                }
+                return;
             }
 
-            return skipped;
+            var now = Environment.TickCount64;
+            if (percent < 100f && now - lastReportMs < ExtractProgressThrottleMs)
+            {
+                return;
+            }
+
+            lastReportMs = now;
+            Dispatcher.UIThread.Post(() => onProgress(current, total, percent));
         }
 
         public static async Task ExtractTar(Stream stream, string outputDir, OnProgress? onProgress = null)
         {
-            var buffer = new byte[512];
-            long total = 0;
-            bool hasKnownLength = false;
+            var headerBuffer = new byte[TarHeaderBufferSize];
+            var contentBuffer = new byte[TarContentBufferSize];
+            Directory.CreateDirectory(outputDir);
+            long lastReportMs = 0;
+            CurrentExtractEntry = null;
+
+            string? pendingPath = null;
+            var entriesProcessed = 0;
+
             try
             {
-                total = stream.Length;
-                hasKnownLength = true;
-            }
-            catch (NotSupportedException)
-            {
-                // Stream doesn't support Length (e.g., GZipStream)
-                // Try to get length from underlying stream if available
-                if (stream is GZipStream gzipStream)
+                while (true)
                 {
-                    try
+                    int headerBytesRead = await stream.ReadAsync(headerBuffer, 0, TarHeaderBufferSize);
+                    if (headerBytesRead == 0)
                     {
-                        // Get length from the base stream (compressed file size)
-                        // This is an approximation but better than nothing
-                        total = gzipStream.BaseStream.Length;
-                        hasKnownLength = true;
+                        break;
                     }
-                    catch
+
+                    if (headerBytesRead < TarHeaderBufferSize)
                     {
-                        // Base stream also doesn't support Length
-                        hasKnownLength = false;
+                        throw new IOException($"Truncated tar header ({headerBytesRead} bytes)");
                     }
-                }
-                else
-                {
-                    hasKnownLength = false;
-                }
-            }
-            long bytesRead = 0;
-            Directory.CreateDirectory(outputDir);
-            Dispatcher.UIThread.Post(() =>
-            {
-                onProgress?.Invoke(bytesRead, hasKnownLength ? total : bytesRead, hasKnownLength ? 0f : 0f);
-            });
-            Stopwatch timer = new Stopwatch();
-            timer.Start();
 
-            while (true)
-            {
-                // Read 512-byte tar header block
-                int headerBytesRead = await stream.ReadAsync(buffer, 0, 512);
-                bytesRead += headerBytesRead;
-                
-                if (headerBytesRead == 0 || buffer.All(b => b == 0))
-                    break;
-
-                // Extract filename (first 100 bytes)
-                string fileName = Encoding.ASCII.GetString(buffer, 0, 100).TrimEnd('\0');
-                if (string.IsNullOrWhiteSpace(fileName))
-                    break;
-
-                // Extract file size (offset 124, 12 bytes, octal)
-                string sizeStr = Encoding.ASCII.GetString(buffer, 124, 12).TrimEnd('\0', ' ');
-                if (!long.TryParse(sizeStr, System.Globalization.NumberStyles.Integer, null, out long fileSize))
-                    fileSize = 0;
-
-                // Sanitize filename to prevent path traversal and illegal characters
-                fileName = PathHelper.SanitizeTarEntryRelativePath(fileName);
-                if (string.IsNullOrWhiteSpace(fileName))
-                {
-                    Logger.LogError("Skipping tar entry with invalid path after sanitization");
-                    bytesRead += await SkipTarEntryContentAsync(stream, buffer, fileSize);
-                    continue;
-                }
-
-                var filePath = Path.Combine(outputDir, fileName);
-                
-                // Validate that the resolved path is still within outputDir
-                var fullOutputDir = Path.GetFullPath(outputDir);
-                var fullFilePath = Path.GetFullPath(filePath);
-                if (!fullFilePath.StartsWith(fullOutputDir + Path.DirectorySeparatorChar) && 
-                    fullFilePath != fullOutputDir)
-                {
-                    Logger.LogError($"Skipping file with suspicious path: {fileName}");
-                    bytesRead += await SkipTarEntryContentAsync(stream, buffer, fileSize);
-                    continue;
-                }
-
-                if (fileSize > 0)
-                {
-                    var directory = Path.GetDirectoryName(filePath);
-                    if (!string.IsNullOrEmpty(directory))
-                        Directory.CreateDirectory(directory);
-
-                    int retry = 0;
-                    while (true)
+                    if (headerBuffer.All(b => b == 0))
                     {
-                        try
+                        break;
+                    }
+
+                    var typeFlag = GetTarTypeFlag(headerBuffer);
+                    var rawPath = GetTarEntryPath(headerBuffer);
+                    string sizeStr = Encoding.ASCII.GetString(headerBuffer, 124, 12);
+                    if (!PathHelper.TryParseTarSizeField(sizeStr, out long fileSize))
+                    {
+                        throw new InvalidDataException(
+                            $"Invalid tar size field for '{rawPath}': '{sizeStr.Trim()}'");
+                    }
+
+                    entriesProcessed++;
+
+                    if (typeFlag == 'L')
+                    {
+                        pendingPath = await ReadTarEntryStringAsync(stream, contentBuffer, fileSize);
+                        Logger.LogUpgradeOutput($"Tar long name: {pendingPath}");
+                        continue;
+                    }
+
+                    if (typeFlag == 'K')
+                    {
+                        await ReadTarEntryStringAsync(stream, contentBuffer, fileSize);
+                        Logger.LogUpgradeOutput($"Tar long link skipped: {rawPath}");
+                        continue;
+                    }
+
+                    if (typeFlag is 'x' or 'g')
+                    {
+                        Logger.LogUpgradeOutput($"Skipping tar meta: {rawPath} ({fileSize} bytes)");
+                        await SkipTarEntryContentAsync(stream, contentBuffer, fileSize);
+                        continue;
+                    }
+
+                    if (typeFlag is '2' or '3' or '4' or '6')
+                    {
+                        Logger.LogUpgradeOutput($"Skipping tar non-file entry: {rawPath} (type {typeFlag})");
+                        await SkipTarEntryContentAsync(stream, contentBuffer, fileSize);
+                        continue;
+                    }
+
+                    if (typeFlag == '5' || fileSize == 0)
+                    {
+                        Logger.LogUpgradeOutput($"Skipping tar directory: {rawPath}");
+                        await SkipTarEntryPaddingAsync(stream, contentBuffer, fileSize);
+                        continue;
+                    }
+
+                    var fileName = PathHelper.SanitizeTarEntryRelativePath(pendingPath ?? rawPath);
+                    pendingPath = null;
+
+                    if (string.IsNullOrWhiteSpace(fileName))
+                    {
+                        Logger.LogUpgradeOutput("Skipping tar entry with empty path after sanitization");
+                        await SkipTarEntryContentAsync(stream, contentBuffer, fileSize);
+                        continue;
+                    }
+
+                    var filePath = Path.Combine(outputDir, fileName);
+                    var fullOutputDir = Path.GetFullPath(outputDir);
+                    var fullFilePath = Path.GetFullPath(filePath);
+                    if (!fullFilePath.StartsWith(fullOutputDir + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
+                        fullFilePath != fullOutputDir)
+                    {
+                        Logger.LogError($"Skipping file with suspicious path: {fileName}");
+                        await SkipTarEntryContentAsync(stream, contentBuffer, fileSize);
+                        continue;
+                    }
+
+                    if (fileSize > 0)
+                    {
+                        CurrentExtractEntry = Path.GetFileName(fileName);
+                        Logger.LogUpgradeOutput($"Extracting: {fileName} ({fileSize} bytes)");
+
+                        var directory = Path.GetDirectoryName(filePath);
+                        if (!string.IsNullOrEmpty(directory))
                         {
-                            using (var fs = File.Create(filePath))
-                            {
-                                long remaining = fileSize;
-                                while (remaining > 0)
-                                {
-                                    int toRead = (int)Math.Min(remaining, buffer.Length);
-                                    int read = await stream.ReadAsync(buffer, 0, toRead);
-                                    bytesRead += read;
-                                    if (read == 0) break;
-                                    await fs.WriteAsync(buffer, 0, read);
-                                    remaining -= read;
+                            Directory.CreateDirectory(directory);
+                        }
 
-                                    // Update progress
-                                    if (hasKnownLength)
+                        var allowProcessKill = !filePath.Contains(
+                            $"{Path.DirectorySeparatorChar}pending-update{Path.DirectorySeparatorChar}",
+                            StringComparison.OrdinalIgnoreCase);
+
+                        int retry = 0;
+                        while (true)
+                        {
+                            try
+                            {
+                                long fileBytesWritten = 0;
+                                using (var fs = File.Create(filePath))
+                                {
+                                    long remaining = fileSize;
+                                    while (remaining > 0)
                                     {
-                                        var percent = (double)bytesRead / total * 100;
-                                        if (timer.ElapsedMilliseconds > 16.65 || percent >= 100) 
+                                        int toRead = (int)Math.Min(remaining, contentBuffer.Length);
+                                        int read = await stream.ReadAsync(contentBuffer, 0, toRead);
+                                        if (read == 0)
                                         {
-                                            Dispatcher.UIThread.Post(() =>
-                                            {
-                                                onProgress?.Invoke(bytesRead, total, (float)percent);
-                                            });
-                                            timer.Restart();
+                                            throw new IOException(
+                                                $"Unexpected end of archive while extracting {fileName} " +
+                                                $"({fileBytesWritten}/{fileSize} bytes written)");
+                                        }
+
+                                        await fs.WriteAsync(contentBuffer, 0, read);
+                                        fileBytesWritten += read;
+                                        remaining -= read;
+
+                                        var filePercent = (float)fileBytesWritten / fileSize * 100f;
+                                        ReportExtractProgress(
+                                            onProgress,
+                                            ref lastReportMs,
+                                            fileBytesWritten,
+                                            fileSize,
+                                            filePercent);
+                                    }
+                                }
+
+                                break;
+                            }
+                            catch (Exception e)
+                            {
+                                Logger.LogError($"Extract write error (attempt {retry + 1}): {fileName}", e);
+                                await Task.Delay(TimeSpan.FromMilliseconds(250));
+                                retry++;
+                                if (allowProcessKill && retry > 2)
+                                {
+                                    try
+                                    {
+                                        var processName = GetFileProcessName(filePath);
+                                        if (processName != null)
+                                        {
+                                            var p = Process.GetProcessesByName(processName).FirstOrDefault();
+                                            p?.Kill();
                                         }
                                     }
-                                    else
+                                    catch (Exception killError)
                                     {
-                                        // For streams without known length, just report bytes read
-                                        if (timer.ElapsedMilliseconds > 16.65) 
-                                        {
-                                            Dispatcher.UIThread.Post(() =>
-                                            {
-                                                onProgress?.Invoke(bytesRead, bytesRead, 0f);
-                                            });
-                                            timer.Restart();
-                                        }
+                                        Logger.LogError("kill process error", killError);
                                     }
                                 }
-                            }
 
-                            break;
-                        }
-                        catch (Exception e)
-                        {
-                            Logger.LogError($"read while extract error (attempt: {retry + 1})", e);
-                            await Task.Delay(TimeSpan.FromMilliseconds(250));
-                            retry++;
-                            if (retry > 2)
-                            {
-                                try
+                                if (retry > 8)
                                 {
-                                    var processName = GetFileProcessName(filePath);
-                                    Console.WriteLine($"process name to kill: {processName}");
-                                    if (processName != null)
-                                    {
-                                        var p = Process.GetProcessesByName(processName).FirstOrDefault();
-                                        p?.Kill();
-                                    }
+                                    throw;
                                 }
-                                catch (Exception killError)
-                                {
-                                    Logger.LogError("kill process error", killError);
-                                }
-                            }
-                            if (retry > 8)
-                            {
-                                throw;
                             }
                         }
                     }
+
+                    await SkipTarEntryPaddingAsync(stream, contentBuffer, fileSize);
                 }
 
-                // Skip padding to next 512-byte boundary
-                long padding = (512 - (fileSize % 512)) % 512;
-                if (padding > 0)
+                Logger.LogUpgradeOutput($"Tar reader processed {entriesProcessed} header(s)");
+            }
+            finally
+            {
+                CurrentExtractEntry = null;
+                if (onProgress != null)
                 {
-                    // Read and discard padding bytes instead of seeking
-                    long remaining = padding;
-                    while (remaining > 0)
-                    {
-                        int toRead = (int)Math.Min(remaining, buffer.Length);
-                        int read = await stream.ReadAsync(buffer, 0, toRead);
-                        bytesRead += read;
-                        if (read == 0) break;
-                        remaining -= read;
-                    }
+                    Dispatcher.UIThread.Post(() => onProgress(1, 1, 100f));
                 }
             }
-            
-            timer.Stop();
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (hasKnownLength)
-                {
-                    onProgress?.Invoke(bytesRead, total, 100f);
-                }
-                else
-                {
-                    onProgress?.Invoke(bytesRead, bytesRead, 0f);
-                }
-            });
         }
 
         private static bool CheckVersion(UpdateInfo? lastVersion, string? currentfile)

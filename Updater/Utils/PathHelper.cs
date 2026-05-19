@@ -94,6 +94,27 @@ namespace Updater.Utils
             return string.Join(Path.DirectorySeparatorChar, safeSegments);
         }
 
+        /// <summary>Reads a ustar 12-byte size field (octal ASCII per POSIX).</summary>
+        public static bool TryParseTarSizeField(string sizeField, out long fileSize)
+        {
+            fileSize = 0;
+            var trimmed = sizeField.TrimEnd('\0', ' ').Trim();
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                return true;
+            }
+
+            try
+            {
+                fileSize = Convert.ToInt64(trimmed, 8);
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
         public static void ValidateWritablePath(string path, string paramName)
         {
             if (string.IsNullOrWhiteSpace(path))
