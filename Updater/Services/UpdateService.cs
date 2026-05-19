@@ -893,18 +893,15 @@ namespace Updater.Services
             }
         }
         
-        private static async Task SkipTarEntryContentAsync(
-            Stream stream,
-            byte[] buffer,
-            long fileSize,
-            ref long bytesRead)
+        private static async Task<long> SkipTarEntryContentAsync(Stream stream, byte[] buffer, long fileSize)
         {
+            long skipped = 0;
             long remaining = fileSize;
             while (remaining > 0)
             {
                 int toRead = (int)Math.Min(remaining, buffer.Length);
                 int read = await stream.ReadAsync(buffer, 0, toRead);
-                bytesRead += read;
+                skipped += read;
                 if (read == 0) break;
                 remaining -= read;
             }
@@ -917,11 +914,13 @@ namespace Updater.Services
                 {
                     int toRead = (int)Math.Min(remaining, buffer.Length);
                     int read = await stream.ReadAsync(buffer, 0, toRead);
-                    bytesRead += read;
+                    skipped += read;
                     if (read == 0) break;
                     remaining -= read;
                 }
             }
+
+            return skipped;
         }
 
         public static async Task ExtractTar(Stream stream, string outputDir, OnProgress? onProgress = null)
@@ -991,7 +990,7 @@ namespace Updater.Services
                 if (string.IsNullOrWhiteSpace(fileName))
                 {
                     Logger.LogError("Skipping tar entry with invalid path after sanitization");
-                    await SkipTarEntryContentAsync(stream, buffer, fileSize, ref bytesRead);
+                    bytesRead += await SkipTarEntryContentAsync(stream, buffer, fileSize);
                     continue;
                 }
 
@@ -1004,7 +1003,7 @@ namespace Updater.Services
                     fullFilePath != fullOutputDir)
                 {
                     Logger.LogError($"Skipping file with suspicious path: {fileName}");
-                    await SkipTarEntryContentAsync(stream, buffer, fileSize, ref bytesRead);
+                    bytesRead += await SkipTarEntryContentAsync(stream, buffer, fileSize);
                     continue;
                 }
 
