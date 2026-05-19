@@ -41,7 +41,24 @@ namespace Updater.ViewModels
                 await Dispatcher.UIThread.InvokeAsync(StartDownloadFlowOnUiThread);
             });
 
-            Cancel = ReactiveCommand.Create(() => { });
+            Cancel = ReactiveCommand.CreateFromTask(async () =>
+            {
+                await Dispatcher.UIThread.InvokeAsync(ExitCancelled);
+            });
+        }
+
+        /// <summary>User declined update — exit so HemoBox OnExitConnect clears the overlay.</summary>
+        public static void ExitCancelled()
+        {
+            Console.Out.WriteLine("!!Cancel!!");
+            Console.Out.Flush();
+
+            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            {
+                desktop.Shutdown();
+            }
+
+            Environment.Exit(0);
         }
 
         private void StartDownloadFlowOnUiThread()

@@ -1,5 +1,8 @@
 using Avalonia;
 using Avalonia.Controls;
+#if DEBUG
+using Avalonia.Diagnostics;
+#endif
 using Avalonia.Markup.Xaml;
 using Avalonia.ReactiveUI;
 using ReactiveUI;
