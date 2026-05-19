@@ -220,8 +220,22 @@ namespace Updater.ViewModels
 
         private void OnInstallProgress(long progress, long totalSize, float percent)
         {
-            ProgressTxt = "";
-            LabelTxt = $"Installing Update... {percent / 100:P2}";
+            var entry = UpdateService.CurrentExtractEntry;
+            if (!string.IsNullOrEmpty(entry) && totalSize > 0)
+            {
+                ProgressTxt = $"{Helper.SizeSuffix(progress)}/{Helper.SizeSuffix(totalSize)}";
+                LabelTxt = UpdateService.SelfUpdateOnlyMode
+                    ? $"Installing {entry}... {percent / 100:P2}"
+                    : $"Installing {entry}... {percent / 100:P2}";
+            }
+            else
+            {
+                ProgressTxt = "";
+                LabelTxt = UpdateService.SelfUpdateOnlyMode
+                    ? $"Installing App Updater... {percent / 100:P2}"
+                    : $"Installing Update... {percent / 100:P2}";
+            }
+
             Percent = percent;
         }
 
