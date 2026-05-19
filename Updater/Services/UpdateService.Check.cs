@@ -89,7 +89,7 @@ namespace Updater.Services
         {
             try
             {
-                using var client = CreateUpdateHttpClient();
+                using var client = CreateCheckHttpClient();
                 var url = BuildUpdateUrl(server, appName, "check-upgrades", includePreRelease);
                 using var response = await client.PostAsJsonAsync(url, CreateCheckBody(probe));
 
@@ -197,7 +197,7 @@ namespace Updater.Services
             bool? includeSelfUpdateInRequest = null,
             Action<int>? onHttpError = null)
         {
-            using var client = CreateUpdateHttpClient();
+            using var client = CreateCheckHttpClient();
             using var response = await client.PostAsJsonAsync(url, CreateCheckBody(probe, includeSelfUpdateInRequest));
 
             if (!response.IsSuccessStatusCode)
@@ -251,6 +251,7 @@ namespace Updater.Services
             UseManifestSystem = false;
             CurrentUpgradeInfo = null;
             SelfUpdateOnlyMode = false;
+            AlreadyDownloaded = false;
             ClearSelfUpdateState();
         }
 
