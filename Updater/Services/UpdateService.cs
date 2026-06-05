@@ -1252,7 +1252,15 @@ namespace Updater.Services
 
                     if (fileSize > 0)
                     {
-                        CurrentExtractEntry = Path.GetFileName(fileName);
+                        // Only publish entry name when this extract reports progress; nested tarballs
+                        // (e.g. app .tar.gz after the outer bundle) use ExtractTar without a callback and
+                        // must not stomp CurrentExtractEntry — otherwise a queued UI update can show
+                        // "SkiaSharp… (1 bytes / 1 bytes)" from the bogus finally callback on the outer extract.
+                        if (onProgress != null)
+                        {
+                            CurrentExtractEntry = Path.GetFileName(fileName);
+                        }
+
                         Logger.LogUpgradeOutput($"Extracting: {fileName} ({fileSize} bytes)");
 
                         var directory = Path.GetDirectoryName(filePath);
@@ -1339,10 +1347,10 @@ namespace Updater.Services
             finally
             {
                 CurrentExtractEntry = null;
-                if (onProgress != null)
-                {
-                    Dispatcher.UIThread.Post(() => onProgress(1, 1, 100f));
-                }
+                // Do not post a synthetic (1, 1, 100%) progress tick: it is queued after the worker
+                // continues into ApplyUpgrades / nested ExtractTar, so the UI can run it late and pair
+                // bogus "1 bytes / 1 bytes" with whatever file name nested extraction set last.
+                // Per-file progress already hits 100% via ReportExtractProgress when each entry completes.
             }
         }
 
