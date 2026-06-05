@@ -24,6 +24,13 @@ namespace Updater.Services
         public static bool UseManifestSystem = false;
         public static UpgradeInfoWrapper? CurrentUpgradeInfo = null;
 
+        /// <summary>
+        /// Sent to <c>/check-upgrades</c> (and <c>download-upgrade</c>) when there is no persisted app
+        /// <see cref="Properties.Settings.LastVersion"/>. The server recognizes this value and skips incremental
+        /// disk upgrade manifests so the client can still use the manifest bundle path.
+        /// </summary>
+        public const string UnknownClientAppVersionSentinel = "0.0.0-hemo.unknown";
+
         /// <summary>Tar entry currently being written (for progress UI).</summary>
         public static string? CurrentExtractEntry { get; private set; }
 

@@ -59,10 +59,9 @@ namespace Updater.Services
         {
             var outcome = new UpdateCheckOutcome();
 
-            if (!string.IsNullOrEmpty(probe.Version))
-            {
-                await TryManifestCheckAsync(server, appName, probe, includePreRelease, outcome);
-            }
+            // Always try manifest first (even when LastVersion is empty) so UseManifestSystem can be set.
+            // Server recognizes UnknownClientAppVersionSentinel and skips incremental disk manifests.
+            await TryManifestCheckAsync(server, appName, probe, includePreRelease, outcome);
 
             if (!outcome.AppNeedsUpdate && !outcome.SkipLegacyCheck)
             {
@@ -308,7 +307,9 @@ namespace Updater.Services
         private static CheckUpgradeRequest CreateCheckBody(VersionProbe probe, bool? includeSelfUpdate = null) =>
             new()
             {
-                Version = probe.Version,
+                Version = string.IsNullOrWhiteSpace(probe.Version)
+                    ? UnknownClientAppVersionSentinel
+                    : probe.Version,
                 Modified = probe.Modified,
                 Checksum = probe.Checksum,
                 IncludeSelfUpdate = includeSelfUpdate
