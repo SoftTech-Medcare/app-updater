@@ -21,20 +21,27 @@ namespace Updater.Utils
 
         public static void LogError(string msg, Exception? e = null)
         {
-            var path = CheckAndReturnFile(error_log_filename);
-
-            string errorTxt = $"{DateTimeOffset.Now}: {msg} || {e?.Message ?? "-"}";
-            if (e?.InnerException != null)
+            try
             {
-                errorTxt += $" || {e.InnerException}";
-            }
-            if (!string.IsNullOrWhiteSpace(e?.StackTrace))
-            {
-                errorTxt += $"\n{e?.StackTrace}";
-            }
-            errorTxt += "\n\n";
+                var path = CheckAndReturnFile(error_log_filename);
 
-            File.AppendAllText(path, errorTxt);
+                string errorTxt = $"{DateTimeOffset.Now}: {msg} || {e?.Message ?? "-"}";
+                if (e?.InnerException != null)
+                {
+                    errorTxt += $" || {e.InnerException}";
+                }
+                if (!string.IsNullOrWhiteSpace(e?.StackTrace))
+                {
+                    errorTxt += $"\n{e?.StackTrace}";
+                }
+                errorTxt += "\n\n";
+
+                File.AppendAllText(path, errorTxt);
+            }
+            catch
+            {
+                // Install dir may be read-only; never let logging mask the original failure.
+            }
         }
 
         public static void LogInfo(string msg)

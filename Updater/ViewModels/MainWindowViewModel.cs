@@ -36,9 +36,8 @@ namespace Updater.ViewModels
             AutoReboot = Settings.Default.AutoReboot;
             EnablePreReleaseVersions = Settings.Default.EnablePreReleaseVersions;
 
-            SaveConfig = ReactiveCommand.Create(() =>
+            SaveConfig = ReactiveCommand.CreateFromTask(async () =>
             {
-
                 Settings.Default.ClientAppPath = AppPath;
                 Settings.Default.UpdateServer = string.IsNullOrWhiteSpace(Server) ? "" : (Regex.IsMatch(Server, @"^https?://") ? Server : "http://" + Server);
                 Settings.Default.AppName = AppName;
@@ -46,7 +45,14 @@ namespace Updater.ViewModels
                 Settings.Default.AutoReboot = AutoReboot;
                 Settings.Default.EnablePreReleaseVersions = EnablePreReleaseVersions;
 
-                Settings.Default.Save();
+                if (!Settings.Default.Save())
+                {
+                    await global::Updater.App.ShowAlert(
+                        "Could not save settings. Ensure this user can write to the Updater data folder " +
+                        "(on Linux, typically ~/.local/share/Updater including settings.json).");
+                    return;
+                }
+
                 Settings.Default.Reload();
 
                 Server = Settings.Default.UpdateServer;
