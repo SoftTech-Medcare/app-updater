@@ -3,6 +3,7 @@ using ReactiveUI;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -297,30 +298,25 @@ namespace Updater.ViewModels
                     }
 
                     var info = new FileInfo(sourcePath);
-                    string? version = null;
-                    if (UpdateService.SelfUpdateOnlyMode)
-                    {
-                        version = UpdateService.SelfUpdateTargetVersion;
-                    }
-                    else if (UpdateService.UseManifestSystem && UpdateService.CurrentUpgradeInfo != null
-                        && !string.IsNullOrWhiteSpace(UpdateService.CurrentUpgradeInfo.TargetVersion))
-                    {
-                        version = UpdateService.CurrentUpgradeInfo.TargetVersion;
-                    }
 
-                    if (string.IsNullOrWhiteSpace(version))
-                    {
-                        version = UpdateService.GetVersionFromFileName(info.Name);
-                    }
-
+                    string? appVersionToPersist = null;
                     if (!UpdateService.SelfUpdateOnlyMode)
                     {
-                        Settings.Default.LastVersion = new UpdateInfo
+                        appVersionToPersist = ResolvePostInstallRecordedAppVersion(info);
+                        if (string.IsNullOrWhiteSpace(appVersionToPersist))
                         {
-                            Modified = info.LastWriteTimeUtc,
-                            Version = version
-                        };
-                        Settings.Default.Save();
+                            Logger.LogError(
+                                "Upgrade finished but installed version could not be resolved; leaving LastVersion unchanged.");
+                        }
+                        else
+                        {
+                            Settings.Default.LastVersion = new UpdateInfo
+                            {
+                                Modified = info.LastWriteTimeUtc,
+                                Version = appVersionToPersist
+                            };
+                            Settings.Default.Save();
+                        }
                     }
 
                     File.Delete(sourcePath);
@@ -332,8 +328,10 @@ namespace Updater.ViewModels
                         Status = UpgradeStatus.Completed,
                         Stage = UpgradeStage.Cleanup,
                         Message = UpdateService.SelfUpdateOnlyMode
-                            ? $"Updater self-update staged successfully. Target: {version}"
-                            : $"Upgrade completed successfully. New version: {version}"
+                            ? $"Updater self-update staged successfully. Target: {UpdateService.SelfUpdateTargetVersion ?? "(unknown)"}"
+                            : string.IsNullOrWhiteSpace(appVersionToPersist)
+                                ? "Upgrade completed successfully. Installed version was not persisted (see prior log)."
+                                : $"Upgrade completed successfully. New version: {appVersionToPersist}"
                     });
 
                     Logger.EndUpgradeSession(UpgradeStatus.Completed);
@@ -364,6 +362,46 @@ namespace Updater.ViewModels
             UpdateService.SelfUpdateOnlyMode ? "Extracting app updater" : "Extracting update";
 
         private static string FinishingStepTitle => "Finishing update";
+
+        /// <summary>Prefix of the virtual main-app upgrade entry built by the update server.</summary>
+        private const string AppUpdateUpgradeIdPrefix = "app-update-";
+
+        /// <summary>
+        /// Resolves the <strong>application</strong> version to persist as <see cref="Settings.LastVersion"/> after a successful app upgrade.
+        /// Not used when only the updater self-updates — that flow must not overwrite app <see cref="Settings.LastVersion"/>.
+        /// Order: manifest <c>targetVersion</c> → upgrade id <c>app-update-…</c> (suffix is the version) → package file name.
+        /// </summary>
+        private static string? ResolvePostInstallRecordedAppVersion(FileInfo packageFile)
+        {
+            if (UpdateService.UseManifestSystem && UpdateService.CurrentUpgradeInfo != null)
+            {
+                var manifest = UpdateService.CurrentUpgradeInfo;
+                if (!string.IsNullOrWhiteSpace(manifest.TargetVersion))
+                {
+                    return manifest.TargetVersion.Trim();
+                }
+
+                var fromUpgradeId = TryGetVersionFromAppUpdateUpgradeId(manifest);
+                if (!string.IsNullOrWhiteSpace(fromUpgradeId))
+                {
+                    return fromUpgradeId.Trim();
+                }
+            }
+
+            return UpdateService.GetVersionFromFileName(packageFile.Name);
+        }
+
+        private static string? TryGetVersionFromAppUpdateUpgradeId(UpgradeInfoWrapper manifest)
+        {
+            var id = manifest.Upgrades?
+                .Select(u => u.Id)
+                .FirstOrDefault(s =>
+                    !string.IsNullOrEmpty(s)
+                    && s.StartsWith(AppUpdateUpgradeIdPrefix, StringComparison.OrdinalIgnoreCase)
+                    && s.Length > AppUpdateUpgradeIdPrefix.Length);
+
+            return string.IsNullOrEmpty(id) ? null : id[AppUpdateUpgradeIdPrefix.Length..];
+        }
 
         private void ApplyProgress(string step, string? detail, float percent)
         {
