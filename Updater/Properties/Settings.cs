@@ -34,17 +34,20 @@ namespace Updater.Properties
         public bool ProgressFullscreen { get; set; } = true;
         public bool EnablePreReleaseVersions { get; set; } = false;
 
-        public void Save()
+        /// <returns><c>true</c> if settings were written; <c>false</c> on IO/permission errors.</returns>
+        public bool Save()
         {
             try
             {
                 var path = GetSettingsFilePath();
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 File.WriteAllText(path, JsonSerializer.Serialize(this, SerializerOptions));
+                return true;
             }
             catch (Exception ex)
             {
                 Logger.LogError("Failed to save updater settings.", ex);
+                return false;
             }
         }
 
