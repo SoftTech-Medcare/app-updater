@@ -221,18 +221,47 @@ namespace Updater.Services
             using var client = CreateDownloadHttpClient();
             using (var res = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
             {
-                long? totalToReceive = res.Content.Headers.ContentLength;
                 long totalDownloaded = 0;
                 var fileName = ResolveDownloadFileName(res);
                 var lastModified = res.Content.Headers.LastModified?.UtcDateTime ?? DateTime.UtcNow;
                 string filePath = Path.Combine(downloadPath, fileName);
                 using (var stream = await res.Content.ReadAsStreamAsync())
                 {
-                    if (!totalToReceive.HasValue)
+                    long? TryGetSeekableStreamLength(Stream s)
                     {
-                        totalToReceive = stream.Length;
+                        try
+                        {
+                            if (s.CanSeek && s.Length > 0)
+                            {
+                                return s.Length;
+                            }
+                        }
+                        catch (NotSupportedException)
+                        {
+                        }
+                        catch (IOException)
+                        {
+                        }
+
+                        return null;
                     }
-                    const int step = 1024; 
+
+                    long? headerLength = res.Content.Headers.ContentLength is long cl && cl > 0 ? cl : null;
+                    long? streamDeclared = TryGetSeekableStreamLength(stream);
+                    long manifestHint = UseManifestSystem && CurrentUpgradeInfo?.PackageSize > 0
+                        ? CurrentUpgradeInfo.PackageSize
+                        : 0;
+
+                    long declared = headerLength ?? streamDeclared ?? 0;
+                    long fixedTotal = Math.Max(declared, manifestHint);
+
+                    // Tiny declared lengths are often bogus (e.g. wrapper stream Length == 1) when the body is large.
+                    if (fixedTotal > 0 && fixedTotal <= 8 && manifestHint <= 0)
+                    {
+                        fixedTotal = 0;
+                    }
+
+                    const int step = 1024;
                     var buffer = new byte[step];
                     using (var sw = File.Create(filePath))
                     {
@@ -245,16 +274,28 @@ namespace Updater.Services
                             totalDownloaded += read;
 
                             sw.Write(buffer, 0, read);
-                            var percent = (double)totalDownloaded / totalToReceive * 100;
-                            if (timer.ElapsedMilliseconds > 16.65 || percent == 100)
+
+                            long displayTotal;
+                            float percent;
+                            if (fixedTotal > 0)
+                            {
+                                displayTotal = fixedTotal;
+                                percent = (float)Math.Min(100.0, (double)totalDownloaded / fixedTotal * 100.0);
+                            }
+                            else
+                            {
+                                displayTotal = 0;
+                                percent = read == 0 && totalDownloaded > 0 ? 100f : 0f;
+                            }
+
+                            if (timer.ElapsedMilliseconds > 16.65 || percent >= 100f || read == 0)
                             {
                                 Dispatcher.UIThread.Post(() =>
                                 {
-                                    onUpdateProgress?.Invoke(totalDownloaded, totalToReceive.Value , (float)percent);
+                                    onUpdateProgress?.Invoke(totalDownloaded, displayTotal, percent);
                                 });
                                 timer.Restart();
                             }
-                            
                         } while (read > 0);
                         timer.Stop();
                     }
