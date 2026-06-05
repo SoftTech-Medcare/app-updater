@@ -302,11 +302,15 @@ namespace Updater.ViewModels
                     string? appVersionToPersist = null;
                     if (!UpdateService.SelfUpdateOnlyMode)
                     {
-                        appVersionToPersist = ResolvePostInstallRecordedAppVersion(info);
+                        appVersionToPersist = ResolvePostInstallRecordedAppVersion(info, out var versionResolveFailureReason);
                         if (string.IsNullOrWhiteSpace(appVersionToPersist))
                         {
+                            var detail = string.IsNullOrWhiteSpace(versionResolveFailureReason)
+                                ? "No diagnostic detail available."
+                                : versionResolveFailureReason;
                             Logger.LogError(
-                                "Upgrade finished but installed version could not be resolved; leaving LastVersion unchanged.");
+                                $"Upgrade finished but installed version could not be resolved; leaving LastVersion unchanged. {detail}");
+                            Logger.LogUpgradeOutput($"Cleanup: LastVersion not updated — {detail}");
                         }
                         else
                         {
@@ -371,8 +375,11 @@ namespace Updater.ViewModels
         /// Not used when only the updater self-updates — that flow must not overwrite app <see cref="Settings.LastVersion"/>.
         /// Order: manifest <c>targetVersion</c> → upgrade id <c>app-update-…</c> (suffix is the version) → package file name.
         /// </summary>
-        private static string? ResolvePostInstallRecordedAppVersion(FileInfo packageFile)
+        /// <param name="unresolvedReason">When return is null: human-readable explanation of why each source failed.</param>
+        private static string? ResolvePostInstallRecordedAppVersion(FileInfo packageFile, out string? unresolvedReason)
         {
+            unresolvedReason = null;
+
             if (UpdateService.UseManifestSystem && UpdateService.CurrentUpgradeInfo != null)
             {
                 var manifest = UpdateService.CurrentUpgradeInfo;
@@ -388,7 +395,50 @@ namespace Updater.ViewModels
                 }
             }
 
-            return UpdateService.GetVersionFromFileName(packageFile.Name);
+            var parsedFromFileName = UpdateService.GetVersionFromFileName(packageFile.Name);
+            if (!string.IsNullOrWhiteSpace(parsedFromFileName))
+            {
+                return parsedFromFileName.Trim();
+            }
+
+            unresolvedReason = BuildPostInstallVersionUnresolvedReason(packageFile);
+            return null;
+        }
+
+        private static string BuildPostInstallVersionUnresolvedReason(FileInfo packageFile)
+        {
+            var parts = new List<string>();
+
+            if (UpdateService.UseManifestSystem && UpdateService.CurrentUpgradeInfo != null)
+            {
+                var manifest = UpdateService.CurrentUpgradeInfo;
+                if (string.IsNullOrWhiteSpace(manifest.TargetVersion))
+                {
+                    parts.Add("check-upgrades targetVersion was empty");
+                }
+
+                var fromId = TryGetVersionFromAppUpdateUpgradeId(manifest);
+                if (string.IsNullOrWhiteSpace(fromId))
+                {
+                    var ids = manifest.Upgrades == null || manifest.Upgrades.Count == 0
+                        ? "(none)"
+                        : string.Join(", ", manifest.Upgrades.Select(u => $"'{u.Id ?? "null"}'"));
+                    parts.Add($"no id starting with '{AppUpdateUpgradeIdPrefix}' in upgrades list ({ids})");
+                }
+            }
+            else if (!UpdateService.UseManifestSystem)
+            {
+                parts.Add("UseManifestSystem=false (legacy /download: no check-upgrades metadata for this install)");
+            }
+            else
+            {
+                parts.Add("CurrentUpgradeInfo is null (no check-upgrades payload on this session)");
+            }
+
+            parts.Add(
+                $"package file name '{packageFile.Name}' did not yield a version (GetVersionFromFileName returned nothing)");
+
+            return string.Join("; ", parts) + ".";
         }
 
         private static string? TryGetVersionFromAppUpdateUpgradeId(UpgradeInfoWrapper manifest)
