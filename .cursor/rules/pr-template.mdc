@@ -1,0 +1,19 @@
+---
+description: Fill App Updater PR checklist when creating or editing PRs
+alwaysApply: true
+---
+
+# PR template (mandatory for agents) — App Updater
+
+Use **`.github/PULL_REQUEST_TEMPLATE.md`** — compact checklist for on-device updater work, not the full Hemopro Engineering Notebook.
+
+## Focus
+
+- Download / install / verify flows on edge devices
+- **Client impact** and failure modes (network, disk, retry)
+- Manual/device test evidence when behavior changes
+
+## Do not
+
+- Copy Hemopro patient/dialysis/Jira Feature Risk boilerplate unless this PR also tracks a HEM card
+- Open PR with empty body or commit-list-only summary

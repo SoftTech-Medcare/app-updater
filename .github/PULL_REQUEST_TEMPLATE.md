@@ -1,58 +1,63 @@
 <!--
-PR Template สำหรับ App Updater
-ใช้สำหรับแก้ updater client / release — ไม่ใช่ Engineering Notebook ของ Feature
+App Updater — PR checklist
+บังคับเมื่องานกระทบ client updater (download / install / verify) ที่ HemoBox / HemoCheckIn ใช้
+โครงสร้างย่อ — เน้น client behavior และ rollout
 -->
 
-## สรุป
+**Summary:** <สรุปการเปลี่ยนแปลงแบบ 1-3 บรรทัด>  
+**Risk:** <Low | Medium | High | Critical>  
+**Production Impact:** <None | Low | Medium | High>
 
-<!-- อธิบายสั้น ๆ ว่าเปลี่ยนอะไร และทำไม -->
+## 1. Requirement
 
--
+- ปัญหา / เป้าหมาย:
+- Acceptance criteria:
+- นอกขอบเขต:
 
-## ประเภทการเปลี่ยนแปลง
+## 2. ประเภทการเปลี่ยนแปลง
 
+- [ ] Download / install flow
+- [ ] Version compare / semver
+- [ ] Integrity verify (hash / signature)
+- [ ] UI / UX บน device
 - [ ] Bug fix
-- [ ] พฤติกรรม update / download / install
-- [ ] UI (Avalonia)
-- [ ] Compatibility กับ Update Server
-- [ ] Build / CI / packaging
 - [ ] เอกสาร / อื่น ๆ
 
-## Version bump ที่ต้องการ
+## 3. ผลกระทบต่อ client
 
-<!-- Release Drafter ใช้ label บน PR -->
+- แอปที่กระทบ (HemoBox / HemoCheckIn / อื่น ๆ):
+- พฤติกรรมที่เปลี่ยนหลังอัปเดต:
+- Breaking change: ใช่ / ไม่ใช่
 
-- [ ] `major` — breaking
-- [ ] `minor` / `enhancement` / `feature`
-- [ ] `patch` / `fix` / `bug`
-- [ ] ไม่ต้องการ release จาก PR นี้
+## 4. Edge Cases / Failure Modes
 
-## ผลกระทบ
+- network drop ระหว่าง download:
+- disk เต็ม / permission:
+- retry / resume:
+- version mismatch หลัง install:
 
-- Platform ที่กระทบ (`Windows` / `Mac` / `Linux` / `Linux-Arm`):
-- ทำงานร่วมกับ Update Server เวอร์ชัน / contract เดิมได้หรือไม่:
-- Breaking change หรือไม่: ใช่ / ไม่ใช่
+## 5. Risk
 
-## Checklist
+- ทำไมถึงระดับความเสี่ยงนี้?
+- อะไรที่อาจทำให้ device brick / อัปเดตค้าง / ติดเวอร์ชันผิด?
 
-- [ ] ติด label สำหรับ version bump แล้ว (ถ้าต้อง release)
-- [ ] พฤติกรรม check / download / apply update ยังถูกต้อง
-- [ ] รองรับ tarball จาก Update Server ตามเดิม
-- [ ] ทดสอบบน platform ที่เกี่ยวข้องแล้ว (อย่างน้อย platform หลักที่กระทบ)
-- [ ] Build / packaging ไม่พัง (`tar.gz`, version ใน csproj / `version.json` ถ้าแตะ)
-- [ ] เอกสาร / README อัปเดตถ้าจำเป็น
-- [ ] เข้าใจผลกระทบหลัง merge → tag → CircleCI → Argo → NFS
+## 6. Tests & การตรวจ
 
-## วิธีทดสอบ
+- [ ] manual / device test (ระบุรุ่น OS / app)
+- [ ] regression กับ update server
+- หลักฐาน / อ้างอิง:
 
-1.
-2.
-3.
+## 7. Production Impact
 
-## ความเสี่ยง / Rollback
+- None / Low / Medium / High
+- Rollback / containment:
 
--
+## 8. AI Generated?
 
-## หมายเหตุสำหรับ Reviewer
+- Yes / No
+- ใช้ AI สำหรับ: <code / test / docs / analysis / other>
 
--
+## 9. Sign-off
+
+- Reviewer:
+- Approved / Changes requested:
